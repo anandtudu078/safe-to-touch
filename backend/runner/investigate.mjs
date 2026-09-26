@@ -31,9 +31,26 @@ function emit(event) {
   process.stdout.write(JSON.stringify(event) + '\n')
 }
 
-function fail(message) {
-  emit({ type: 'error', message })
+function fail(message, statusCode) {
+  emit({ type: 'error', message: friendlyError(message, statusCode) })
   process.exit(1)
+}
+
+function friendlyError(message, statusCode) {
+  const msg = String(message ?? '')
+  if (statusCode === 402 || /payment required|out of credits/i.test(msg)) {
+    return (
+      'Your Codebuff account is out of credits. Add credits or a plan at ' +
+      'https://www.codebuff.com (account billing), then run the investigation again.'
+    )
+  }
+  if (/invalid api key|unauthorized|401/i.test(msg)) {
+    return (
+      'Your CODEBUFF_API_KEY was rejected. Get a fresh key at ' +
+      'https://www.codebuff.com/api-keys and update .env.'
+    )
+  }
+  return msg
 }
 
 async function main() {
@@ -110,7 +127,7 @@ async function main() {
     return
   }
   if (output.type === 'error') {
-    return fail(output.message)
+    return fail(output.message, output.statusCode)
   }
   fail(
     `Run ended without a structured result (output type: ${output.type})`,
