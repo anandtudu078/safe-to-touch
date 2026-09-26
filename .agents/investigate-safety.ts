@@ -24,6 +24,17 @@ export const investigateSafety: AgentDefinition = {
       docs: { type: 'string', description: 'One short sentence: what the Docs check found' },
       dependents: { type: 'string', description: 'One short sentence: what the Dependents check found' },
       tests: { type: 'string', description: 'One short sentence: what the Tests check found' },
+      evidence: {
+        type: 'object',
+        description: 'Raw evidence excerpts per check, for drill-down display',
+        properties: {
+          history: { type: 'string', description: 'Commit hashes, dates, subjects, churn summary — 2-6 lines' },
+          docs: { type: 'string', description: 'Verbatim doc quote(s) with source file — 1-4 lines' },
+          dependents: { type: 'string', description: 'The DETAIL lines: dependent file + how it uses the target' },
+          tests: { type: 'string', description: 'TEST_FILES and WHAT_ASSERTED lines, or the no-coverage statement' },
+        },
+        required: ['history', 'docs', 'dependents', 'tests'],
+      },
       suggestions: {
         type: 'array',
         items: { type: 'string' },
@@ -64,7 +75,13 @@ Also, before/alongside the structured output, print a compact human-readable car
   Docs: ...
   Dependents: ...
   Tests: ...
-so a CLI reader sees the verdict without parsing JSON.`,
+so a CLI reader sees the verdict without parsing JSON.
+
+EVIDENCE: fill the evidence object with the raw excerpts a developer would otherwise dig up manually:
+- history: the actual commit line(s) (hash, date, subject) and the CHURN line from the History report.
+- docs: the verbatim quote(s) and the file they came from (the QUOTE and SOURCE lines).
+- dependents: the per-file DETAIL lines from the Dependents report (path + how it uses the target).
+- tests: the TEST_FILES and WHAT_ASSERTED lines, or the exact no-coverage statement.`,
   handleSteps: function* (ctx) {
     const target =
       (ctx && ctx.params && ctx.params.target) ||
