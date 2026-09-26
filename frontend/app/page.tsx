@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 
 // Same-origin by default (single-container deploy: FastAPI serves this app).
 // Local dev can override via NEXT_PUBLIC_API_URL (see frontend/.env.local.example).
@@ -55,6 +55,16 @@ type HeatmapResult = {
   summary: string
 }
 
+type RepoStatus = {
+  connected: boolean
+  name?: string
+  path?: string
+  branch?: string
+  latest_commit?: string
+  file_count?: number
+  error?: string
+}
+
 const VERDICT_CLASS: Record<string, string> = {
   Safe: 'verdict-safe',
   Risky: 'verdict-risky',
@@ -69,15 +79,124 @@ const SECTION_BY_AGENT: Record<string, keyof Evidence> = {
 }
 
 // ---------------------------------------------------------------------------
+// RepoConnector — connect a remote URL or local path as the active repo
+// ---------------------------------------------------------------------------
+
+type RepoConnectorProps = {
+  onConnected: () => void
+}
+
+function RepoConnector({ onConnected }: RepoConnectorProps) {
+  const [open, setOpen] = useState(false)
+  const [source, setSource] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState<RepoStatus | null>(null)
+  const [connectError, setConnectError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Load current repo status on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/repo/status`)
+      .then((r) => r.json())
+      .then((d: RepoStatus) => setStatus(d))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 50)
+  }, [open])
+
+  async function connect() {
+    if (!source.trim() || loading) return
+    setLoading(true)
+    setConnectError(null)
+    try {
+      const res = await fetch(`${API_BASE}/repo/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: source.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setConnectError(data.detail || `Error ${res.status}`)
+      } else {
+        setStatus(data as RepoStatus)
+        setSource('')
+        setOpen(false)
+        onConnected()
+      }
+    } catch (e) {
+      setConnectError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="repo-connector">
+      {/* Status badge */}
+      <div className="repo-status-row">
+        <span className={`repo-badge ${status?.connected ? 'repo-connected' : 'repo-disconnected'}`}>
+          {status?.connected ? '● ' : '○ '}
+          {status?.connected
+            ? `${status.name} · ${status.branch} · ${status.file_count} files`
+            : 'No repo connected'}
+        </span>
+        {status?.connected && status.latest_commit && (
+          <span className="repo-commit" title={status.path}>
+            {status.latest_commit}
+          </span>
+        )}
+        <button
+          className="repo-toggle"
+          onClick={() => setOpen((v) => !v)}
+          title={open ? 'Close' : 'Connect a different repo'}
+        >
+          {open ? '✕' : '⚙ Connect repo'}
+        </button>
+      </div>
+
+      {open && (
+        <div className="repo-panel">
+          <p className="repo-hint">
+            Paste a <strong>git URL</strong> (https/ssh) to clone, or an <strong>absolute local path</strong> to an existing repo.
+          </p>
+          <div className="repo-input-row">
+            <input
+              ref={inputRef}
+              className="repo-input"
+              placeholder="https://github.com/org/repo.git  or  /home/user/my-project"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && connect()}
+              disabled={loading}
+            />
+            <button
+              className="repo-connect-btn"
+              onClick={connect}
+              disabled={loading || !source.trim()}
+            >
+              {loading ? 'Connecting…' : 'Connect'}
+            </button>
+          </div>
+          {connectError && <p className="repo-error">{connectError}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // FileBrowser — fetches /files once and renders a searchable file list
 // ---------------------------------------------------------------------------
 
 type FileBrowserProps = {
   onSelect: (file: string) => void
   mode: 'investigate' | 'heatmap'
+  refreshKey: number
 }
 
-function FileBrowser({ onSelect, mode }: FileBrowserProps) {
+function FileBrowser({ onSelect, mode, refreshKey }: FileBrowserProps) {
   const [open, setOpen] = useState(false)
   const [files, setFiles] = useState<string[]>([])
   const [query, setQuery] = useState('')
@@ -85,10 +204,9 @@ function FileBrowser({ onSelect, mode }: FileBrowserProps) {
   const [fetchError, setFetchError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    if (!open) return
-    if (files.length > 0) return // already loaded
+  const loadFiles = useCallback(() => {
     setLoading(true)
+    setFetchError(null)
     fetch(`${API_BASE}/files`)
       .then((r) => r.json())
       .then((data) => {
@@ -101,7 +219,12 @@ function FileBrowser({ onSelect, mode }: FileBrowserProps) {
         setFetchError(e.message)
         setLoading(false)
       })
-  }, [open, files.length])
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    loadFiles()
+  }, [open, loadFiles, refreshKey])  // refreshKey triggers reload after repo switch
 
   const filtered = query
     ? files.filter((f) => f.toLowerCase().includes(query.toLowerCase()))
@@ -159,6 +282,187 @@ function FileBrowser({ onSelect, mode }: FileBrowserProps) {
 }
 
 // ---------------------------------------------------------------------------
+// FileEditor — open any repo file, edit it in a textarea, save back
+// ---------------------------------------------------------------------------
+
+type FileEditorProps = {
+  refreshKey: number
+}
+
+function FileEditor({ refreshKey }: FileEditorProps) {
+  const [open, setOpen] = useState(false)
+  const [files, setFiles] = useState<string[]>([])
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [content, setContent] = useState('')
+  const [originalContent, setOriginalContent] = useState('')
+  const [lineCount, setLineCount] = useState(0)
+  const [loadingFiles, setLoadingFiles] = useState(false)
+  const [loadingContent, setLoadingContent] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
+  const [editorError, setEditorError] = useState<string | null>(null)
+  const [filterQuery, setFilterQuery] = useState('')
+
+  // Load file list when editor opens or repo changes
+  useEffect(() => {
+    if (!open) return
+    setLoadingFiles(true)
+    setEditorError(null)
+    fetch(`${API_BASE}/files`)
+      .then((r) => r.json())
+      .then((data) => {
+        setFiles(data.files ?? [])
+        setLoadingFiles(false)
+      })
+      .catch((e) => {
+        setEditorError(e.message)
+        setLoadingFiles(false)
+      })
+  }, [open, refreshKey])
+
+  async function openFile(file: string) {
+    setLoadingContent(true)
+    setEditorError(null)
+    setSaveMsg(null)
+    try {
+      const res = await fetch(`${API_BASE}/file-content?file=${encodeURIComponent(file)}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
+      setSelectedFile(file)
+      setContent(data.content)
+      setOriginalContent(data.content)
+      setLineCount(data.line_count)
+    } catch (e) {
+      setEditorError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoadingContent(false)
+    }
+  }
+
+  async function saveFile() {
+    if (!selectedFile || saving) return
+    setSaving(true)
+    setSaveMsg(null)
+    setEditorError(null)
+    try {
+      const res = await fetch(`${API_BASE}/file-content`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: selectedFile, content }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
+      setOriginalContent(content)
+      setLineCount(data.line_count)
+      setSaveMsg(`Saved — ${data.line_count} lines`)
+    } catch (e) {
+      setEditorError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function discardChanges() {
+    setContent(originalContent)
+    setSaveMsg(null)
+    setEditorError(null)
+  }
+
+  const isDirty = content !== originalContent
+  const filteredFiles = filterQuery
+    ? files.filter((f) => f.toLowerCase().includes(filterQuery.toLowerCase()))
+    : files
+
+  return (
+    <div className="file-editor-wrap">
+      <button
+        className="editor-toggle"
+        onClick={() => { setOpen((v) => !v); setSelectedFile(null); setContent('') }}
+        title={open ? 'Close editor' : 'Open file editor'}
+      >
+        {open ? '✕ Close editor' : '✏️ Edit files'}
+      </button>
+
+      {open && (
+        <div className="editor-panel">
+          <div className="editor-sidebar">
+            <input
+              className="browser-search"
+              placeholder="Filter files…"
+              value={filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+            />
+            {loadingFiles && <p className="browser-status">Loading…</p>}
+            {editorError && !selectedFile && <p className="browser-status browser-error">{editorError}</p>}
+            <ul className="browser-list editor-file-list">
+              {filteredFiles.map((f) => (
+                <li key={f}>
+                  <button
+                    className={`browser-file ${selectedFile === f ? 'editor-file-active' : ''}`}
+                    onClick={() => openFile(f)}
+                    title={f}
+                  >
+                    {f}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="editor-main">
+            {!selectedFile && (
+              <p className="editor-placeholder">← Select a file to view and edit</p>
+            )}
+            {loadingContent && <p className="editor-placeholder">Loading…</p>}
+            {selectedFile && !loadingContent && (
+              <>
+                <div className="editor-topbar">
+                  <span className="editor-filename">{selectedFile}</span>
+                  <span className="editor-meta">{lineCount} lines</span>
+                  {isDirty && (
+                    <span className="editor-dirty" title="Unsaved changes">● unsaved</span>
+                  )}
+                  <div className="editor-actions">
+                    {isDirty && (
+                      <button
+                        className="editor-btn editor-discard"
+                        onClick={discardChanges}
+                        title="Discard changes"
+                      >
+                        Discard
+                      </button>
+                    )}
+                    <button
+                      className="editor-btn editor-save"
+                      onClick={saveFile}
+                      disabled={!isDirty || saving}
+                      title="Save file"
+                    >
+                      {saving ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+                {saveMsg && <p className="editor-save-msg">{saveMsg}</p>}
+                {editorError && <p className="browser-status browser-error">{editorError}</p>}
+                <textarea
+                  className="editor-textarea"
+                  value={content}
+                  onChange={(e) => { setContent(e.target.value); setSaveMsg(null) }}
+                  spellCheck={false}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                />
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -171,6 +475,8 @@ export default function Home() {
   const [heatmap, setHeatmap] = useState<HeatmapResult | null>(null)
   const [openEvidence, setOpenEvidence] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Bumped whenever a new repo is connected — forces FileBrowser + FileEditor to reload
+  const [repoRefreshKey, setRepoRefreshKey] = useState(0)
 
   async function run() {
     const subject = target.trim()
@@ -252,6 +558,17 @@ export default function Home() {
         Paste a file + line from a legacy codebase. Four checks run in parallel. One verdict.
       </p>
 
+      {/* ── Repo connector ─────────────────────────────────────────── */}
+      <RepoConnector
+        onConnected={() => {
+          setRepoRefreshKey((k) => k + 1)
+          setTarget('')
+          setResult(null)
+          setHeatmap(null)
+          setError(null)
+        }}
+      />
+
       <div className="mode-tabs" role="tablist">
         <button
           role="tab"
@@ -290,6 +607,7 @@ export default function Home() {
 
       <FileBrowser
         mode={mode}
+        refreshKey={repoRefreshKey}
         onSelect={(file) => {
           setTarget(file)
           setResult(null)
@@ -297,6 +615,9 @@ export default function Home() {
           setError(null)
         }}
       />
+
+      {/* ── File editor ────────────────────────────────────────────── */}
+      <FileEditor refreshKey={repoRefreshKey} />
 
       {(investigating || checks.some((c) => c.status !== 'pending')) && (
         <ul className="checks">

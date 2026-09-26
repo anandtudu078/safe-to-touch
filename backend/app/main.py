@@ -7,16 +7,27 @@ frontend is unchanged.
 
 POST /heatmap: runs the checks for every function in a file and asks Gemini
 to rank them hottest-first.
+
+POST /repo/connect: clone a remote URL or validate a local path and activate
+it as the target repo for all subsequent checks.
+
+GET /repo/status: return the currently active repo name, branch, and commit.
+
+GET /file-content: return the raw text of a file in the active repo.
+
+PATCH /file-content: write new content back to a file in the active repo.
 """
 
 import asyncio
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import AsyncIterator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,10 +63,226 @@ class HeatmapRequest(BaseModel):
     file: str = Field(min_length=1, description="File path to scan, e.g. 'src/date.ts'")
 
 
+class RepoConnectRequest(BaseModel):
+    source: str = Field(
+        min_length=1,
+        description="A git remote URL (https/ssh) or an absolute local path to a git repo",
+    )
+
+
+class FileContentPatchRequest(BaseModel):
+    file: str = Field(min_length=1, description="Repo-relative file path")
+    content: str = Field(description="Full new file content")
+
+
+# ---------------------------------------------------------------------------
+# Runtime repo state — overridden by POST /repo/connect without restart
+# ---------------------------------------------------------------------------
+_ACTIVE_REPO_PATH: Path | None = None
+
+
 def _target_repo() -> Path:
+    """Return the active target repo path, preferring the runtime override."""
+    if _ACTIVE_REPO_PATH is not None:
+        return _ACTIVE_REPO_PATH
     raw = os.environ.get("TARGET_REPO_PATH", "target-repo")
     candidate = Path(raw)
     return candidate if candidate.is_absolute() else PROJECT_ROOT / raw
+
+
+def _git_run(*args: str, cwd: Path) -> str:
+    """Run a git command and return stdout. Raises HTTPException on failure."""
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=400, detail=exc.stderr.strip() or str(exc)) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"git {args[0]} timed out") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="git is not available on PATH") from exc
+
+
+# ---------------------------------------------------------------------------
+# Repo management endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/repo/connect")
+async def repo_connect(req: RepoConnectRequest) -> dict:
+    """Clone a remote git URL or validate a local path, then activate it.
+
+    Remote URLs are cloned into PROJECT_ROOT/target-repo-connected/ (wiping any
+    previous clone so the directory is always fresh).  Local absolute paths are
+    validated in-place.  After a successful connect every subsequent call to
+    /investigate, /heatmap, and /files operates on the new repo.
+    """
+    global _ACTIVE_REPO_PATH  # noqa: PLW0603
+
+    source = req.source.strip()
+    is_url = source.startswith(("http://", "https://", "git@", "git://", "ssh://"))
+
+    if is_url:
+        dest = PROJECT_ROOT / "target-repo-connected"
+        if dest.exists():
+            shutil.rmtree(dest)
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                ["git", "clone", "--depth=50", source, str(dest)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"git clone failed: {exc.stderr.strip()}",
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(status_code=504, detail="git clone timed out (120 s)") from exc
+        repo_path = dest
+    else:
+        repo_path = Path(source)
+        if not repo_path.is_absolute():
+            raise HTTPException(
+                status_code=400,
+                detail="Local path must be absolute (e.g. /home/user/my-repo)",
+            )
+        if not repo_path.is_dir():
+            raise HTTPException(status_code=404, detail=f"Directory not found: {source}")
+
+    # Validate it's a real git repo
+    git_dir = await asyncio.to_thread(
+        subprocess.run,
+        ["git", "-C", str(repo_path), "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+    )
+    if git_dir.returncode != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not a git repository: {source}",
+        )
+
+    _ACTIVE_REPO_PATH = repo_path
+    # Also update the env var so checks.py picks it up (it reads the env directly)
+    os.environ["TARGET_REPO_PATH"] = str(repo_path)
+
+    branch = await asyncio.to_thread(
+        lambda: subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+    )
+    commit = await asyncio.to_thread(
+        lambda: subprocess.run(
+            ["git", "-C", str(repo_path), "log", "-1", "--format=%h %s"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+    )
+    file_count = await asyncio.to_thread(
+        lambda: len(subprocess.run(
+            ["git", "-C", str(repo_path), "ls-files"],
+            capture_output=True, text=True,
+        ).stdout.strip().splitlines())
+    )
+    return {
+        "connected": True,
+        "name": repo_path.name,
+        "path": str(repo_path),
+        "source": source,
+        "branch": branch,
+        "latest_commit": commit,
+        "file_count": file_count,
+    }
+
+
+@app.get("/repo/status")
+async def repo_status() -> dict:
+    """Return info about the currently active target repo."""
+    repo = _target_repo()
+    if not repo.is_dir():
+        return {"connected": False, "error": "No target repo found"}
+
+    branch = await asyncio.to_thread(
+        lambda: subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+    )
+    commit = await asyncio.to_thread(
+        lambda: subprocess.run(
+            ["git", "-C", str(repo), "log", "-1", "--format=%h %s"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+    )
+    file_count = await asyncio.to_thread(
+        lambda: len(subprocess.run(
+            ["git", "-C", str(repo), "ls-files"],
+            capture_output=True, text=True,
+        ).stdout.strip().splitlines())
+    )
+    return {
+        "connected": True,
+        "name": repo.name,
+        "path": str(repo),
+        "branch": branch,
+        "latest_commit": commit,
+        "file_count": file_count,
+    }
+
+
+@app.get("/file-content")
+async def get_file_content(file: str) -> dict:
+    """Return the raw text of a repo-relative file path."""
+    repo = _target_repo()
+    if not repo.is_dir():
+        raise HTTPException(status_code=404, detail="No target repo found")
+    target = repo / file
+    # Security: must stay inside the repo
+    try:
+        target.resolve().relative_to(repo.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {file}")
+    try:
+        content = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    lines = content.splitlines()
+    return {"file": file, "content": content, "line_count": len(lines)}
+
+
+@app.patch("/file-content")
+async def patch_file_content(req: FileContentPatchRequest) -> dict:
+    """Overwrite a repo file with new content and return the updated line count."""
+    repo = _target_repo()
+    if not repo.is_dir():
+        raise HTTPException(status_code=404, detail="No target repo found")
+    target = repo / req.file
+    # Security: must stay inside the repo
+    try:
+        target.resolve().relative_to(repo.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {req.file}")
+    try:
+        target.write_text(req.content, encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    lines = req.content.splitlines()
+    return {"file": req.file, "saved": True, "line_count": len(lines)}
 
 
 @app.get("/files")
