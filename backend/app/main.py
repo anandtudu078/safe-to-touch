@@ -177,3 +177,10 @@ async def heatmap(req: HeatmapRequest) -> StreamingResponse:
 FRONTEND_EXPORT = Path(os.environ.get("FRONTEND_EXPORT", PROJECT_ROOT / "frontend/out"))
 if FRONTEND_EXPORT.is_dir():
     app.mount("/", StaticFiles(directory=FRONTEND_EXPORT, html=True), name="frontend")
+    print(f"[startup] UI mounted from {FRONTEND_EXPORT}", flush=True)
+else:
+    print(
+        f"[startup] UI NOT FOUND at {FRONTEND_EXPORT} - '/' will 404. "
+        "Build the frontend (cd frontend && npm run build) or set FRONTEND_EXPORT.",
+        flush=True,
+    )
