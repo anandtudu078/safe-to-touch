@@ -98,8 +98,10 @@ The frontend talks to the backend at `NEXT_PUBLIC_API_URL` (default
 ## Verifying the setup
 
 ```bash
-npm run smoke:agents   # all 5 agent definitions load and validate
-npm run typecheck      # agent definitions typecheck
+npm run smoke:agents        # all 5 agent definitions load and validate
+npm run smoke:orchestrator  # orchestrator fan-out/fallback/merge logic (offline)
+npm run smoke:sse           # frontend-style SSE round-trip against a running backend
+npm run typecheck           # agent definitions typecheck
 cd frontend && npm run typecheck && npm run build
 ```
 
