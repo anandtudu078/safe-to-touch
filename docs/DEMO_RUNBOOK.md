@@ -97,13 +97,13 @@ day before). If the live API fails, say: "Rather than fight conference wifi,
 here's the exact run we did this morning," play ~60s of it, then continue the
 narration live on the code. Record it at the same zoom level you'll present at.
 
-**Fallback B — CLI demo.** The same capability runs in the terminal with zero
-web stack:
+**Fallback B — no API at all.** The 4 evidence checks are deterministic (git/grep) and
+run without any key:
 ```bash
-codebuff
-@Investigate Safety target-repo/src/utils/date.ts:120
+./.venv/Scripts/python -c "import os; os.environ['TARGET_REPO_PATH']='./target-repo'; from backend.app import checks; print(checks.collect('parseDateString in src/date.ts').model_dump_json(indent=2))"
 ```
-Show the parallel subagents in the CLI and the verdict card in the output.
+Walk through the raw reports and apply the verdict rules by hand — the rules are
+deterministic, so you can narrate exactly why it lands on Risky.
 
 **Never do on stage:** fresh `npm install`, first-ever API call, cloning a repo,
 or editing the target choice. Everything on stage must have run before.

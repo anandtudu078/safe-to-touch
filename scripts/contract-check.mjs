@@ -1,29 +1,40 @@
 // Verifies the end-to-end output contract without an API key:
-//   orchestrator outputSchema  ==  frontend result-card fields
-// (The backend forwards SDK structured output verbatim, so it has no field
-// list of its own; the contract is between the two ends of the pipeline.)
+//   backend pydantic schemas  ==  frontend result-card fields
 // Run with: npm run smoke:contract
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { loadLocalAgents } from '@codebuff/sdk'
+import { spawnSync } from 'node:child_process'
 
 function fail(msg) {
   console.error(`FAIL: ${msg}`)
   process.exit(1)
 }
 
-const agentsPath = fileURLToPath(new URL('../.agents', import.meta.url))
-const { agents } = await loadLocalAgents({ agentsPath, validate: true })
-
-const def = agents['investigate-safety']
-if (!def) fail('investigate-safety agent not found')
-if (def.outputMode !== 'structured_output') {
-  fail(`outputMode must be 'structured_output', got '${def.outputMode}'`)
+// Extract the field lists straight from the pydantic schemas via the venv python.
+const root = fileURLToPath(new URL('..', import.meta.url))
+const candidates = [
+  `${root}.venv/Scripts/python.exe`,
+  `${root}.venv/bin/python`,
+]
+const venvPython = candidates.find((p) => existsSync(p))
+if (!venvPython) {
+  fail('Python venv not found; run: python -m venv .venv && pip install -r backend/requirements.txt')
 }
 
-const schemaProps = Object.keys(def.outputSchema?.properties ?? {})
-const required = new Set(def.outputSchema?.required ?? [])
-if (schemaProps.length === 0) fail('outputSchema has no properties')
+const extract = [
+  "import sys; sys.path.insert(0, 'backend');",
+  'from app.schemas import VerdictResult, HeatmapFunction;',
+  'import json;',
+  "print(json.dumps({'verdict': list(VerdictResult.model_fields),",
+  "'required': [k for k, v in VerdictResult.model_fields.items() if v.is_required()],",
+  "'heat': list(HeatmapFunction.model_fields)}))",
+].join(' ')
+const res = spawnSync(venvPython, ['-c', extract], { encoding: 'utf8', cwd: root })
+if (res.status !== 0) fail(`schema extraction failed: ${res.stderr}`)
+const schema = JSON.parse(res.stdout)
+const schemaProps = schema.verdict
+const required = new Set(schema.required)
+if (schemaProps.length === 0) fail('VerdictResult has no fields')
 
 // Fields the frontend card actually renders (see frontend/app/page.tsx)
 const pageSrc = readFileSync(
@@ -58,27 +69,31 @@ for (const field of optional) {
   if (!guarded) console.warn(`WARN: optional field '${field}' never rendered`)
 }
 
-// Backend forwards output verbatim: result spread + type tag (see backend runner+app)
-const runnerSrc = readFileSync(
-  fileURLToPath(new URL('../backend/runner/investigate.mjs', import.meta.url)),
+// Backend forwards the pydantic verdict verbatim into the result event
+const mainSrc = readFileSync(
+  fileURLToPath(new URL('../backend/app/main.py', import.meta.url)),
   'utf8',
 )
-if (!runnerSrc.includes("{ type: 'result', mode, ...output.value }")) {
-  fail('runner does not forward structured output verbatim')
+if (!mainSrc.includes('**result.model_dump()')) {
+  fail('backend does not forward the verdict model verbatim')
+}
+if (!mainSrc.includes('**merged.model_dump()')) {
+  fail('backend does not forward the heatmap model verbatim')
+}
+// SSE display names must match the frontend check keys exactly
+for (const display of ['History Analyst', 'Docs Analyst', 'Dependents Mapper', 'Test Coverage Checker']) {
+  if (!mainSrc.includes(`"${display}"`)) fail(`backend missing canonical check name '${display}'`)
+  if (!pageSrc.includes(`'${display}'`)) fail(`frontend missing check key '${display}'`)
 }
 
-// Heatmap contract: risk-heatmap schema vs the heatmap card in page.tsx
-const heat = agents['risk-heatmap']
-if (!heat) fail('risk-heatmap agent not found')
-if (heat.outputMode !== 'structured_output') {
-  fail("risk-heatmap outputMode must be 'structured_output'")
+// Heatmap contract: HeatmapFunction schema vs the heatmap card in page.tsx
+// (schema.heat is a list of field names)
+const heatFields = new Set(schema.heat)
+for (const field of ['verdict', 'reason', 'line', 'name', 'confidence']) {
+  if (!heatFields.has(field)) fail(`HeatmapFunction missing field '${field}'`)
 }
-const fnProps = heat.outputSchema?.properties?.functions?.items?.properties
-if (!fnProps?.verdict || !fnProps?.reason || !fnProps?.line) {
-  fail('risk-heatmap function items must have verdict/reason/line')
-}
-for (const field of heat.outputSchema?.required ?? []) {
-  if (!pageSrc.includes(`heatmap.${field}`)) {
+for (const field of heatFields) {
+  if (!pageSrc.includes(`f.${field}`) && !pageSrc.includes(`'${field}'`)) {
     fail(`heatmap field '${field}' is not rendered by the frontend`)
   }
 }

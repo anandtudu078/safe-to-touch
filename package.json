@@ -3,20 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Should I Touch This — investigate whether a line of legacy code is safe to change or delete.",
+  "description": "Should I Touch This — root workspace scripts (frontend has its own package.json).",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "smoke:agents": "node scripts/smoke-agents.mjs",
     "smoke:sse": "node scripts/sse-smoke.mjs",
-    "smoke:orchestrator": "node scripts/smoke-orchestrator.mjs",
     "smoke:contract": "node scripts/contract-check.mjs",
     "check:secrets": "node scripts/check-secrets.mjs"
-  },
-  "dependencies": {
-    "@codebuff/sdk": "^0.10.7"
-  },
-  "devDependencies": {
-    "@types/node": "^26.6.3",
-    "typescript": "^7.0.2"
   }
 }
