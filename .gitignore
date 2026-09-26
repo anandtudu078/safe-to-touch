@@ -2,7 +2,6 @@ node_modules/
 **/node_modules/
 .next/
 **/.next/
-frontend/out/
 .venv/
 target-repo/
 __pycache__/
