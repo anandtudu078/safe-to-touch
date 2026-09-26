@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 // Same-origin by default (single-container deploy: FastAPI serves this app).
 // Local dev can override via NEXT_PUBLIC_API_URL (see frontend/.env.local.example).
@@ -68,12 +68,99 @@ const SECTION_BY_AGENT: Record<string, keyof Evidence> = {
   'Test Coverage Checker': 'tests',
 }
 
-const EVIDENCE_LABELS: { key: keyof Evidence; label: string }[] = [
-  { key: 'history', label: 'History' },
-  { key: 'docs', label: 'Docs' },
-  { key: 'dependents', label: 'Dependents' },
-  { key: 'tests', label: 'Tests' },
-]
+// ---------------------------------------------------------------------------
+// FileBrowser — fetches /files once and renders a searchable file list
+// ---------------------------------------------------------------------------
+
+type FileBrowserProps = {
+  onSelect: (file: string) => void
+  mode: 'investigate' | 'heatmap'
+}
+
+function FileBrowser({ onSelect, mode }: FileBrowserProps) {
+  const [open, setOpen] = useState(false)
+  const [files, setFiles] = useState<string[]>([])
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    if (files.length > 0) return // already loaded
+    setLoading(true)
+    fetch(`${API_BASE}/files`)
+      .then((r) => r.json())
+      .then((data) => {
+        setFiles(data.files ?? [])
+        if (data.error) setFetchError(data.error)
+        setLoading(false)
+        setTimeout(() => inputRef.current?.focus(), 50)
+      })
+      .catch((e) => {
+        setFetchError(e.message)
+        setLoading(false)
+      })
+  }, [open, files.length])
+
+  const filtered = query
+    ? files.filter((f) => f.toLowerCase().includes(query.toLowerCase()))
+    : files
+
+  function pick(file: string) {
+    onSelect(file)
+    setOpen(false)
+    setQuery('')
+  }
+
+  return (
+    <div className="file-browser">
+      <button
+        className="browser-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label="Browse repo files"
+        title="Browse files in the target repo"
+      >
+        {open ? '✕ Close browser' : '📂 Browse files'}
+      </button>
+
+      {open && (
+        <div className="browser-panel">
+          <input
+            ref={inputRef}
+            className="browser-search"
+            placeholder="Filter files…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {loading && <p className="browser-status">Loading…</p>}
+          {fetchError && <p className="browser-status browser-error">{fetchError}</p>}
+          {!loading && !fetchError && filtered.length === 0 && (
+            <p className="browser-status">No files found.</p>
+          )}
+          <ul className="browser-list">
+            {filtered.map((f) => (
+              <li key={f}>
+                <button
+                  className="browser-file"
+                  onClick={() => pick(mode === 'investigate' ? `${f}:1` : f)}
+                  title={f}
+                >
+                  {f}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
 
 export default function Home() {
   const [mode, setMode] = useState<'investigate' | 'heatmap'>('investigate')
@@ -200,6 +287,16 @@ export default function Home() {
           {investigating ? 'Scanning…' : mode === 'investigate' ? 'Investigate' : 'Scan file'}
         </button>
       </div>
+
+      <FileBrowser
+        mode={mode}
+        onSelect={(file) => {
+          setTarget(file)
+          setResult(null)
+          setHeatmap(null)
+          setError(null)
+        }}
+      />
 
       {(investigating || checks.some((c) => c.status !== 'pending')) && (
         <ul className="checks">

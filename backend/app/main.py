@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -57,6 +57,25 @@ def _target_repo() -> Path:
     return candidate if candidate.is_absolute() else PROJECT_ROOT / raw
 
 
+@app.get("/files")
+async def list_files() -> dict:
+    """Return all source files tracked in the target repo, grouped by directory."""
+    repo = _target_repo()
+    if not repo.is_dir():
+        return {"files": [], "error": "Target repo not found"}
+    try:
+        result = await asyncio.to_thread(
+            lambda: __import__("subprocess").run(
+                ["git", "-C", str(repo), "ls-files"],
+                capture_output=True, text=True, timeout=10, check=True,
+            ).stdout
+        )
+        files = [f for f in result.strip().splitlines() if f]
+        return {"files": sorted(files)}
+    except Exception as e:  # noqa: BLE001
+        return {"files": [], "error": str(e)}
+
+
 @app.get("/health")
 async def health() -> dict:
     return {
@@ -80,14 +99,14 @@ CANONICAL_CHECKS = [
 ]
 
 
-async def _check_events(reports: CheckReports) -> AsyncIterator[dict]:
+async def _check_events(reports: CheckReports) -> AsyncIterator[str]:
     """Emit per-check lifecycle events, then run Gemini with the collected evidence."""
     for _, display in CANONICAL_CHECKS:
-        yield {"type": "check_start", "agent_id": display, "display_name": display}
+        yield _sse({"type": "check_start", "agent_id": display, "display_name": display})
     result = await asyncio.to_thread(gemini_client.merge_verdict, reports)
     for _, display in CANONICAL_CHECKS:
-        yield {"type": "check_finish", "agent_id": display, "display_name": display}
-    yield {"type": "result", "mode": "investigate", **result.model_dump()}
+        yield _sse({"type": "check_finish", "agent_id": display, "display_name": display})
+    yield _sse({"type": "result", "mode": "investigate", **result.model_dump()})
 
 
 @app.post("/investigate")
@@ -99,7 +118,7 @@ async def investigate(req: InvestigateRequest) -> StreamingResponse:
             reports = await asyncio.to_thread(checks.collect, subject)
             async with asyncio.timeout(AGENT_TIMEOUT_SECONDS):
                 async for event in _check_events(reports):
-                    yield _sse(event)
+                    yield event
         except checks.CheckError as e:
             yield _sse({"type": "error", "message": str(e)})
         except TimeoutError:

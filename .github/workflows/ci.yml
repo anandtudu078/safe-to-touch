@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Python: lint, type-check, tests ───────────────────────────────────────
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt pytest httpx
+
+      - name: Create demo repo
+        run: bash scripts/create-demo-repo.sh target-repo
+
+      - name: Run tests
+        env:
+          TARGET_REPO_PATH: target-repo
+        run: python -m pytest tests/ -v --tb=short
+
+      - name: Check Python syntax
+        run: python -m py_compile backend/app/main.py backend/app/checks.py backend/app/schemas.py backend/app/gemini_client.py backend/app/fallback_ui.py app.py
+
+  # ── Node: typecheck, contract, secrets ────────────────────────────────────
+  node:
+    name: Node checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: frontend
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+        working-directory: frontend
+
+      - name: Install root deps
+        run: npm install
+
+      - name: Schema contract check
+        run: node scripts/contract-check.mjs
+
+      - name: Secrets scan
+        run: node scripts/check-secrets.mjs
+
+  # ── Docker build smoke test ────────────────────────────────────────────────
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    # Only run on push to main (not on every PR to save minutes)
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t safe-to-touch:ci .
+
+      - name: Health check
+        run: |
+          docker run -d --name stt -p 7860:7860 -e GEMINI_API_KEY=dummy safe-to-touch:ci
+          sleep 5
+          curl -sf http://localhost:7860/health | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert d['status'] == 'ok', f'Expected ok, got {d}'
+          print('health OK:', d)
+          "
+          docker stop stt

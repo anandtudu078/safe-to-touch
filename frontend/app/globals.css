@@ -413,3 +413,101 @@ button:disabled {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+/* ── File browser ─────────────────────────────────────────────────────────── */
+
+.file-browser {
+  width: 100%;
+  max-width: 640px;
+  margin-top: 8px;
+}
+
+.browser-toggle {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.browser-toggle:hover {
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.browser-panel {
+  margin-top: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.browser-search {
+  display: block;
+  width: 100%;
+  background: var(--bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.browser-search:focus {
+  outline: none;
+  border-bottom-color: var(--blue);
+}
+
+.browser-status {
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.browser-error {
+  color: var(--red);
+}
+
+.browser-list {
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.browser-file {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 6px 12px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+}
+
+.browser-file:hover {
+  background: var(--bg);
+  color: var(--blue);
+}
+
+.browser-list li:last-child .browser-file {
+  border-bottom: none;
+}
