@@ -16,7 +16,7 @@ Two modes: **Investigate** (one line/function) and **Heatmap** (whole file, all 
 | Layer | Technology |
 |---|---|
 | Backend API | FastAPI (Python 3.12), SSE streaming |
-| AI merge layer | Google Gemini via `google-genai` SDK (`gemini-2.0-flash` default) |
+| AI merge layer | Google Gemini via `google-genai` SDK (`gemini-2.5-flash` default) |
 | Evidence checks | Deterministic Python — `git` CLI + regex (no LLM in checks) |
 | Frontend | Next.js 15 (App Router), React 19, TypeScript, static export |
 | Deployment | Docker multi-stage build → Hugging Face Spaces (port 7860) |
@@ -107,7 +107,7 @@ docker run -p 7860:7860 --env GEMINI_API_KEY=YOUR_KEY safe-to-touch
 | Var | Default | Required | Notes |
 |---|---|---|---|
 | `GEMINI_API_KEY` | — | **Yes** | Free key from aistudio.google.com |
-| `GEMINI_MODEL` | `gemini-2.0-flash` | No | Any free-tier model |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | No | Any free-tier model |
 | `TARGET_REPO_PATH` | `./target-repo` | No | Absolute or relative to project root |
 | `PORT` | `7860` | No | HF Spaces expects 7860 |
 | `AGENT_TIMEOUT_SECONDS` | `240` | No | Overall investigation/heatmap cap |

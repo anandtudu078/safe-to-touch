@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from .schemas import CheckReports, HeatmapResult, VerdictResult
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 _VERDICT_RULES = """Apply these rules EXACTLY, in order:
 RISKY if any of:
