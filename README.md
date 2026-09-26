@@ -16,8 +16,10 @@ No login, no database, no saved history. One input, one verdict.
   dependents-mapper.ts       # who references or depends on this code
   test-coverage-checker.ts   # does any test exercise this path
 target-repo/                 # clone the repo you want to investigate here (gitignored)
-backend/                     # Phase 2: FastAPI + POST /investigate
-frontend/                    # Phase 2: Next.js UI
+backend/
+  runner/investigate.mjs     # Node runner: SDK run -> NDJSON events on stdout
+  app/main.py                # FastAPI: POST /investigate (SSE) + GET /health
+frontend/                    # Next.js UI
 ```
 
 ## Run it now (CLI)
@@ -51,12 +53,31 @@ or conversationally:
 Confidence: **High** = all four checks returned concrete evidence · **Medium** = one check
 inconclusive · **Low** = two or more inconclusive or the target couldn't be located.
 
-## Backend (Phase 2)
+## Backend
+
+FastAPI + one endpoint. The endpoint spawns a small Node runner that executes the
+`investigate-safety` mode via `@codebuff/sdk` (working directory pointed at the target
+repo) and streams its events back to the browser as SSE.
 
 ```bash
-cp .env.example .env   # add CODEBUFF_API_KEY from codebuff.com/api-keys
+cp .env.example .env        # add CODEBUFF_API_KEY from codebuff.com/api-keys
+python -m venv .venv
+./.venv/Scripts/pip install -r backend/requirements.txt   # Windows Git Bash
+# .venv/bin/pip install -r backend/requirements.txt       # macOS/Linux
+
+./.venv/Scripts/python -m uvicorn backend.app.main:app --port 8000
 ```
 
-The FastAPI backend runs this same `investigate-safety` mode headlessly via
-`@codebuff/sdk` with the working directory pointed at `target-repo/` (configurable via
-`TARGET_REPO_PATH`).
+- `GET /health` — reports whether the API key is set and the target repo exists
+- `POST /investigate` — body `{ "target": "src/utils/date.ts:120" }`, responds with an
+  SSE stream:
+  - `check_start` / `check_finish` — one per subagent as the 4 checks run in parallel
+  - `result` — the final verdict card: `{ verdict, confidence, summary, history, docs,
+    dependents, tests, suggestions }`
+  - `error` — any failure, as a message
+
+No auth, no database, no saved history.
+
+## Frontend (next)
+
+Next.js page: one input, one "Investigate" button, live per-check status, one results card.
