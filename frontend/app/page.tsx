@@ -2,7 +2,9 @@
 
 import { useState } from 'react'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+// Same-origin by default (single-container deploy: FastAPI serves this app).
+// Local dev can override via NEXT_PUBLIC_API_URL (see frontend/.env.local.example).
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
 
 type CheckStatus = 'pending' | 'running' | 'done'
 

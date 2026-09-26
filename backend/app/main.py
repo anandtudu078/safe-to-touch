@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import checks, gemini_client
@@ -168,3 +169,11 @@ async def heatmap(req: HeatmapRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- Single-container serving -------------------------------------------------
+# The exported Next.js app (frontend/out), mounted LAST so it never shadows
+# /health, /investigate, or /heatmap. Absent locally unless you run the export.
+FRONTEND_EXPORT = Path(os.environ.get("FRONTEND_EXPORT", PROJECT_ROOT / "frontend/out"))
+if FRONTEND_EXPORT.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_EXPORT, html=True), name="frontend")
