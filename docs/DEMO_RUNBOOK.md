@@ -8,8 +8,8 @@ a minute-by-minute script, and a fallback plan for every failure mode.
 
 ## 1. Day-before checklist (do NOT skip)
 
-- [ ] `.env` exists with a working `CODEBUFF_API_KEY`
-      (get one at codebuff.com/api-keys; test it once — see smoke test below)
+- [ ] `.env` exists with a working `GEMINI_API_KEY`
+      (get a free key at aistudio.google.com; test it once — see smoke test below)
 - [ ] Target repo cloned with real git history:
       `git clone <repo-url> target-repo`
       Pick a repo with (a) multi-year history, (b) a README or DECISIONS.md,
@@ -22,9 +22,8 @@ a minute-by-minute script, and a fallback plan for every failure mode.
       after one boot it's warm.
 - [ ] Run all smoke tests and expect all green:
       ```bash
-      npm run smoke:agents        # 5 agents load
-      npm run smoke:orchestrator  # fan-out/fallback/merge logic
-      # with backend running:      npm run smoke:sse
+      # with backend running:
+      npm run smoke:sse
       ```
 - [ ] Do **one real end-to-end investigation** the day before, from the browser.
       Confirm you see: 4 checks animate → a verdict card appears.
@@ -86,8 +85,8 @@ deterministic, so the same evidence gives the same verdict.
 |---|---|---|
 | `api_key_set:false` in /health | .env missing/not loaded | Restart backend from repo root; keep talking (you have ~15s) |
 | `target_repo_exists:false` | repo cloned elsewhere | `TARGET_REPO_PATH` in `.env` should point at it |
-| Error event: CODEBUFF_API_KEY not set | same as above | Same fix; if unrecoverable → **Fallback A** |
-| Stream hangs > 60s | Codebuff API slow/down | **Fallback A**; do not wait on stage past 60s |
+| Error event: GEMINI_API_KEY not set | same as above | Same fix; if unrecoverable → **Fallback A** |
+| Stream hangs > 60s | Gemini API slow/down | **Fallback A**; do not wait on stage past 60s |
 | Error event: "timed out after 240s" | same | **Fallback A** |
 | Frontend won't load | port conflict / compile error | Open `frontend/.next` warm build? If broken → **Fallback B** |
 | Verdict looks wrong/odd | target picked badly | Use your pre-picked backup target from the day-before checklist |
