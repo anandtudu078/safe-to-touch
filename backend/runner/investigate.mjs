@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Bridges the investigate-safety Codebuff mode to the FastAPI backend.
+// Bridges the Codebuff investigation modes to the FastAPI backend.
 // Protocol: one JSON request on stdin -> NDJSON events on stdout.
 // Events: check_start | check_finish | result | error
+// Modes:  "investigate" (single target verdict) | "heatmap" (whole-file ranking)
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +10,22 @@ import { CodebuffClient, loadLocalAgents } from '@codebuff/sdk'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(here, '..', '..')
+
+const MODES = {
+  investigate: {
+    agent: 'investigate-safety',
+    promptKey: 'target',
+    prompt: (t) =>
+      `Investigate whether this code is safe to change or delete: ${t}`,
+    paramKey: 'target',
+  },
+  heatmap: {
+    agent: 'risk-heatmap',
+    promptKey: 'file',
+    prompt: (f) => `Build a risk heatmap for every function in this file: ${f}`,
+    paramKey: 'file',
+  },
+}
 
 function emit(event) {
   process.stdout.write(JSON.stringify(event) + '\n')
@@ -34,8 +51,10 @@ async function main() {
     return fail(`Invalid JSON request: ${err?.message ?? err}`)
   }
 
-  const target = typeof req.target === 'string' ? req.target.trim() : ''
-  if (!target) return fail('Missing required field: target')
+  const mode = MODES[req.mode] ? req.mode : 'investigate'
+  const modeCfg = MODES[mode]
+  const subject = String(req[modeCfg.promptKey] ?? '').trim()
+  if (!subject) return fail(`Missing required field: ${modeCfg.promptKey}`)
 
   const apiKey = process.env.CODEBUFF_API_KEY
   if (!apiKey) {
@@ -57,17 +76,17 @@ async function main() {
         .join('; ')}`,
     )
   }
-  if (!agents['investigate-safety']) {
-    return fail('investigate-safety agent not found in .agents/')
+  if (!agents[modeCfg.agent]) {
+    return fail(`${modeCfg.agent} agent not found in .agents/`)
   }
 
   const client = new CodebuffClient({ apiKey, cwd: repoPath })
 
   const emitted = new Set()
   const { output } = await client.run({
-    agent: 'investigate-safety',
-    prompt: `Investigate whether this code is safe to change or delete: ${target}`,
-    params: { target },
+    agent: modeCfg.agent,
+    prompt: modeCfg.prompt(subject),
+    params: { [modeCfg.paramKey]: subject },
     agentDefinitions: Object.values(agents),
     handleEvent: (event) => {
       if (event.type === 'subagent_start' || event.type === 'subagent_finish') {
@@ -87,14 +106,14 @@ async function main() {
   })
 
   if (output.type === 'structuredOutput' && output.value) {
-    emit({ type: 'result', ...output.value })
+    emit({ type: 'result', mode, ...output.value })
     return
   }
   if (output.type === 'error') {
     return fail(output.message)
   }
   fail(
-    `Investigation ended without a structured verdict (output type: ${output.type})`,
+    `Run ended without a structured result (output type: ${output.type})`,
   )
 }
 

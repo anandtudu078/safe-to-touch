@@ -3,6 +3,9 @@
 POST /investigate streams SSE events while the investigate-safety Codebuff
 mode runs (4 parallel checks -> verdict merge), then emits a final `result`
 event with the structured verdict.
+
+POST /heatmap does the same for the risk-heatmap mode: every function in a
+file, checked and ranked hottest-first.
 """
 
 import asyncio
@@ -23,10 +26,10 @@ PROJECT_ROOT = BACKEND_DIR.parents[1]  # repo root (backend/app -> backend -> ro
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-RUNNER = BACKEND_DIR.parent / "runner" / "investigate.mjs"  # backend/runner/investigate.mjs
+RUNNER = BACKEND_DIR.parent / "runner" / "investigate.mjs"
 AGENT_TIMEOUT_SECONDS = float(os.environ.get("AGENT_TIMEOUT_SECONDS", "240"))
 
-app = FastAPI(title="Should I Touch This", version="0.1.0")
+app = FastAPI(title="Should I Touch This", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,6 +44,10 @@ class InvestigateRequest(BaseModel):
         min_length=1,
         description="File path + line/function (e.g. 'src/utils/date.ts:120') or a code snippet",
     )
+
+
+class HeatmapRequest(BaseModel):
+    file: str = Field(min_length=1, description="File path to scan, e.g. 'src/date.ts'")
 
 
 def _target_repo() -> Path:
@@ -62,7 +69,7 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-async def _run_agent(target: str) -> AsyncIterator[dict]:
+async def _run_agent(subject_key: str, subject: str, mode: str) -> AsyncIterator[dict]:
     """Spawn the Node runner and yield its NDJSON events as they arrive."""
     try:
         process = await asyncio.create_subprocess_exec(
@@ -86,7 +93,8 @@ async def _run_agent(target: str) -> AsyncIterator[dict]:
     async def write_request() -> None:
         payload = json.dumps(
             {
-                "target": target,
+                "mode": mode,
+                subject_key: subject,
                 "repo_path": os.environ.get("TARGET_REPO_PATH", "target-repo"),
             }
         ).encode()
@@ -140,24 +148,15 @@ async def _run_agent(target: str) -> AsyncIterator[dict]:
             pass
 
 
-@app.post("/investigate")
-async def investigate(req: InvestigateRequest) -> StreamingResponse:
-    target = req.target.strip()
-    if not target:
-        raise HTTPException(status_code=400, detail="target must not be blank")
-    if not _target_repo().is_dir():
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "No target repo found. Clone the repo you want to investigate "
-                "into ./target-repo (or set TARGET_REPO_PATH)."
-            ),
-        )
+async def _stream_mode_response(
+    mode: str, subject_key: str, subject: str
+) -> StreamingResponse:
+    """Shared SSE response for both modes."""
 
     async def stream() -> AsyncIterator[str]:
         try:
             async with asyncio.timeout(AGENT_TIMEOUT_SECONDS):
-                async for event in _run_agent(target):
+                async for event in _run_agent(subject_key, subject, mode):
                     yield _sse(event)
         except TimeoutError:
             yield _sse(
@@ -172,3 +171,32 @@ async def investigate(req: InvestigateRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _require_target_repo() -> None:
+    if not _target_repo().is_dir():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No target repo found. Clone the repo you want to investigate "
+                "into ./target-repo (or set TARGET_REPO_PATH)."
+            ),
+        )
+
+
+@app.post("/investigate")
+async def investigate(req: InvestigateRequest) -> StreamingResponse:
+    subject = req.target.strip()
+    if not subject:
+        raise HTTPException(status_code=400, detail="target must not be blank")
+    _require_target_repo()
+    return await _stream_mode_response("investigate", "target", subject)
+
+
+@app.post("/heatmap")
+async def heatmap(req: HeatmapRequest) -> StreamingResponse:
+    subject = req.file.strip()
+    if not subject:
+        raise HTTPException(status_code=400, detail="file must not be blank")
+    _require_target_repo()
+    return await _stream_mode_response("heatmap", "file", subject)

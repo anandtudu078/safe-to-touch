@@ -20,6 +20,7 @@ if (validationErrors && validationErrors.length > 0) {
 const ids = Object.keys(agents)
 const expected = [
   'investigate-safety',
+  'risk-heatmap',
   'history-analyst',
   'docs-analyst',
   'dependents-mapper',
@@ -32,10 +33,16 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
-const orchestrator = agents['investigate-safety']
-if (!orchestrator.spawnableAgents || orchestrator.spawnableAgents.length !== 4) {
-  console.error('investigate-safety must spawn exactly 4 subagents')
-  process.exit(1)
+for (const id of ['investigate-safety', 'risk-heatmap']) {
+  const orchestrator = agents[id]
+  if (!orchestrator.spawnableAgents || orchestrator.spawnableAgents.length !== 4) {
+    console.error(`${id} must spawn exactly 4 subagents`)
+    process.exit(1)
+  }
+  if (orchestrator.outputMode !== 'structured_output') {
+    console.error(`${id} must emit structured output`)
+    process.exit(1)
+  }
 }
 
 console.log(`SMOKE_OK: ${ids.length} agents loaded — ${ids.join(', ')}`)

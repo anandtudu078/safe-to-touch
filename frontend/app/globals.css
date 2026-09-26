@@ -136,6 +136,26 @@ button:disabled {
   }
 }
 
+.mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.tab {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 0.8rem;
+  padding: 7px 16px;
+}
+
+.tab.active {
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
 .error {
   margin-top: 20px;
   width: 100%;
@@ -272,5 +292,111 @@ button:disabled {
 
 .suggestions ul {
   padding-left: 18px;
+  font-size: 0.85rem;
+}
+
+.chevron {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  padding: 0 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.chevron.open {
+  transform: rotate(90deg);
+  color: var(--blue);
+}
+
+.evidence {
+  width: 100%;
+  margin: 6px 0 2px 18px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+  text-align: left;
+}
+
+.heatmap .card-head {
+  margin-bottom: 12px;
+}
+
+.heatmap-title {
+  font-size: 1.1rem;
+  color: var(--blue);
+  border: none;
+  padding: 0;
+}
+
+.heat-list {
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.heat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.heat-badge {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.heat-row.verdict-risky .heat-badge {
+  color: var(--red);
+  background: rgba(248, 81, 73, 0.12);
+}
+
+.heat-row.verdict-safe .heat-badge {
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.12);
+}
+
+.heat-row.verdict-review .heat-badge {
+  color: var(--amber);
+  background: rgba(210, 153, 34, 0.12);
+}
+
+.heat-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.heat-name em {
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 400;
+  font-size: 0.75rem;
+}
+
+.heat-reason {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.empty {
+  color: var(--muted);
   font-size: 0.85rem;
 }

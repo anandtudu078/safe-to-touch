@@ -63,8 +63,24 @@ const runnerSrc = readFileSync(
   fileURLToPath(new URL('../backend/runner/investigate.mjs', import.meta.url)),
   'utf8',
 )
-if (!runnerSrc.includes("{ type: 'result', ...output.value }")) {
+if (!runnerSrc.includes("{ type: 'result', mode, ...output.value }")) {
   fail('runner does not forward structured output verbatim')
+}
+
+// Heatmap contract: risk-heatmap schema vs the heatmap card in page.tsx
+const heat = agents['risk-heatmap']
+if (!heat) fail('risk-heatmap agent not found')
+if (heat.outputMode !== 'structured_output') {
+  fail("risk-heatmap outputMode must be 'structured_output'")
+}
+const fnProps = heat.outputSchema?.properties?.functions?.items?.properties
+if (!fnProps?.verdict || !fnProps?.reason || !fnProps?.line) {
+  fail('risk-heatmap function items must have verdict/reason/line')
+}
+for (const field of heat.outputSchema?.required ?? []) {
+  if (!pageSrc.includes(`heatmap.${field}`)) {
+    fail(`heatmap field '${field}' is not rendered by the frontend`)
+  }
 }
 
 console.log(

@@ -20,7 +20,7 @@ backend/
   runner/investigate.mjs     # Node runner: SDK run -> NDJSON events on stdout
   app/main.py                # FastAPI: POST /investigate (SSE) + GET /health
 frontend/
-  app/page.tsx               # Next.js UI: input, live checks, results card
+  app/page.tsx               # Next.js UI: two modes, live checks, cards
 scripts/
   smoke-agents.mjs           # validates all .agents definitions load
 ```
@@ -75,16 +75,24 @@ python -m venv .venv
 - `POST /investigate` — body `{ "target": "src/utils/date.ts:120" }`, responds with an
   SSE stream:
   - `check_start` / `check_finish` — one per subagent as the 4 checks run in parallel
-  - `result` — the final verdict card: `{ verdict, confidence, summary, history, docs,
-    dependents, tests, suggestions }`
+  - `result` — the verdict card: `{ verdict, confidence, summary, history, docs,
+    dependents, tests, evidence, suggestions }` (evidence holds raw excerpts for
+    drill-down)
   - `error` — any failure, as a message
+- `POST /heatmap` — body `{ "file": "src/date.ts" }` — checks **every function in the
+  file** with the same 4 parallel subagents and returns a ranked list (hottest first):
+  `{ file, functions: [{ name, line, verdict, confidence, reason }], summary }`
 
 No auth, no database, no saved history.
 
 ## Frontend
 
-One page: an input, an "Investigate" button, live status for the 4 parallel checks,
-and a single results card (verdict, confidence, per-check findings).
+One page, two modes:
+- **One line** — an input, an "Investigate" button, live status for the 4 parallel
+  checks, and a results card with per-check findings. Click ▸ on any finding to
+  drill into the raw evidence (actual commits, doc quotes, call sites).
+- **Whole file** — paste a file path, get a risk heatmap: every function ranked
+  Risky → Needs Review → Safe with its strongest piece of evidence.
 
 ```bash
 cd frontend
@@ -98,7 +106,7 @@ The frontend talks to the backend at `NEXT_PUBLIC_API_URL` (default
 ## Verifying the setup
 
 ```bash
-npm run smoke:agents        # all 5 agent definitions load and validate
+npm run smoke:agents        # all 6 agent definitions load and validate
 npm run smoke:orchestrator  # orchestrator fan-out/fallback/merge logic (offline)
 npm run smoke:sse           # frontend-style SSE round-trip against a running backend
 npm run typecheck           # agent definitions typecheck
