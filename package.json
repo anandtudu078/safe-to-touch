@@ -6,7 +6,8 @@
   "description": "Should I Touch This — investigate whether a line of legacy code is safe to change or delete.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "smoke:agents": "node scripts/smoke-agents.mjs"
+    "smoke:agents": "node scripts/smoke-agents.mjs",
+    "smoke:sse": "node scripts/sse-smoke.mjs"
   },
   "dependencies": {
     "@codebuff/sdk": "^0.10.7"

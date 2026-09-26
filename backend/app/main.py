@@ -64,14 +64,21 @@ def _sse(event: dict) -> str:
 
 async def _run_agent(target: str) -> AsyncIterator[dict]:
     """Spawn the Node runner and yield its NDJSON events as they arrive."""
-    process = await asyncio.create_subprocess_exec(
-        "node",
-        str(RUNNER),
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=str(PROJECT_ROOT),
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "node",
+            str(RUNNER),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(PROJECT_ROOT),
+        )
+    except FileNotFoundError:
+        yield {
+            "type": "error",
+            "message": "Node.js is not available on PATH; cannot run the investigation runner.",
+        }
+        return
     assert process.stdin is not None
     assert process.stdout is not None
     assert process.stderr is not None
@@ -109,7 +116,10 @@ async def _run_agent(target: str) -> AsyncIterator[dict]:
             if event.get("type") == "error":
                 emitted_error = True
             yield event
-        await writer
+        try:
+            await writer
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # runner exited before reading the request; its error surfaces below
         returncode = await process.wait()
         if returncode != 0 and not emitted_error:
             yield {
@@ -124,6 +134,10 @@ async def _run_agent(target: str) -> AsyncIterator[dict]:
         if process.returncode is None:
             process.kill()
         stderr_task.cancel()
+        try:
+            await stderr_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 @app.post("/investigate")
