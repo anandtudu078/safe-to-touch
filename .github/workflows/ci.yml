@@ -34,6 +34,11 @@ jobs:
       - name: Check Python syntax
         run: python -m py_compile backend/app/main.py backend/app/checks.py backend/app/schemas.py backend/app/gemini_client.py backend/app/fallback_ui.py app.py
 
+      - name: Schema contract check
+        # Spawns a Python interpreter to read the pydantic schemas, so it runs
+        # here (deps installed) rather than in the Node job (no venv there).
+        run: node scripts/contract-check.mjs
+
   # ── Node: typecheck, contract, secrets ────────────────────────────────────
   node:
     name: Node checks
@@ -58,9 +63,6 @@ jobs:
 
       - name: Install root deps
         run: npm install
-
-      - name: Schema contract check
-        run: node scripts/contract-check.mjs
 
       - name: Secrets scan
         run: node scripts/check-secrets.mjs

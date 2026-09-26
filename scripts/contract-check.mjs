@@ -12,13 +12,20 @@ function fail(msg) {
 
 // Extract the field lists straight from the pydantic schemas via the venv python.
 const root = fileURLToPath(new URL('..', import.meta.url))
-const candidates = [
-  `${root}.venv/Scripts/python.exe`,
-  `${root}.venv/bin/python`,
-]
-const venvPython = candidates.find((p) => existsSync(p))
-if (!venvPython) {
-  fail('Python venv not found; run: python -m venv .venv && pip install -r backend/requirements.txt')
+function findPython() {
+  // Prefer the project venv, then fall back to a system interpreter
+  // (CI installs backend/requirements.txt into the system Python).
+  for (const p of [`${root}.venv/Scripts/python.exe`, `${root}.venv/bin/python`]) {
+    if (existsSync(p)) return p
+  }
+  for (const cmd of ['python', 'python3']) {
+    if (spawnSync(cmd, ['--version'], { encoding: 'utf8' }).status === 0) return cmd
+  }
+  return null
+}
+const python = findPython()
+if (!python) {
+  fail('No Python interpreter found; run: python -m venv .venv && pip install -r backend/requirements.txt')
 }
 
 const extract = [
@@ -29,8 +36,13 @@ const extract = [
   "'required': [k for k, v in VerdictResult.model_fields.items() if v.is_required()],",
   "'heat': list(HeatmapFunction.model_fields)}))",
 ].join(' ')
-const res = spawnSync(venvPython, ['-c', extract], { encoding: 'utf8', cwd: root })
-if (res.status !== 0) fail(`schema extraction failed: ${res.stderr}`)
+const res = spawnSync(python, ['-c', extract], { encoding: 'utf8', cwd: root })
+if (res.status !== 0) {
+  if (res.stderr.includes('ModuleNotFoundError')) {
+    fail(`Python deps missing; run: pip install -r backend/requirements.txt (${res.stderr.trim()})`)
+  }
+  fail(`schema extraction failed: ${res.stderr}`)
+}
 const schema = JSON.parse(res.stdout)
 const schemaProps = schema.verdict
 const required = new Set(schema.required)
