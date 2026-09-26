@@ -282,6 +282,7 @@ export default function Home() {
                     {f.name}
                     <em>:{f.line}</em>
                   </span>
+                  <span className="heat-conf">{f.confidence}</span>
                   <span className="heat-reason">{f.reason}</span>
                 </li>
               ))}

@@ -1,17 +1,17 @@
-"""FastAPI backend for "Should I Touch This".
+"""FastAPI backend for "Should I Touch This" — Gemini edition.
 
-POST /investigate streams SSE events while the investigate-safety Codebuff
-mode runs (4 parallel checks -> verdict merge), then emits a final `result`
-event with the structured verdict.
+POST /investigate: 4 deterministic checks (git, docs, dependents, tests) run
+in a thread pool, then Gemini merges them into one verdict. Streams the same
+SSE events as before (check_start / check_finish / result / error), so the
+frontend is unchanged.
 
-POST /heatmap does the same for the risk-heatmap mode: every function in a
-file, checked and ranked hottest-first.
+POST /heatmap: runs the checks for every function in a file and asks Gemini
+to rank them hottest-first.
 """
 
 import asyncio
 import json
 import os
-from collections import deque
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -21,15 +21,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import checks, gemini_client
+from .schemas import CheckReports
+
 BACKEND_DIR = Path(__file__).resolve().parent  # backend/app
-PROJECT_ROOT = BACKEND_DIR.parents[1]  # repo root (backend/app -> backend -> root)
+PROJECT_ROOT = BACKEND_DIR.parents[1]  # repo root
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-RUNNER = BACKEND_DIR.parent / "runner" / "investigate.mjs"
 AGENT_TIMEOUT_SECONDS = float(os.environ.get("AGENT_TIMEOUT_SECONDS", "240"))
+GEMINI_TIMEOUT_SECONDS = float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "60"))
 
-app = FastAPI(title="Should I Touch This", version="0.2.0")
+app = FastAPI(title="Should I Touch This", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,10 +43,7 @@ app.add_middleware(
 
 
 class InvestigateRequest(BaseModel):
-    target: str = Field(
-        min_length=1,
-        description="File path + line/function (e.g. 'src/utils/date.ts:120') or a code snippet",
-    )
+    target: str = Field(min_length=1, description="'file.ts:120', 'func in file.ts', or a file path")
 
 
 class HeatmapRequest(BaseModel):
@@ -56,12 +56,12 @@ def _target_repo() -> Path:
 
 @app.get("/health")
 async def health() -> dict:
-    repo = _target_repo()
     return {
         "status": "ok",
-        "api_key_set": bool(os.environ.get("CODEBUFF_API_KEY")),
-        "target_repo_exists": repo.is_dir(),
-        "target_repo_path": str(repo),
+        "engine": "gemini",
+        "api_key_set": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
+        "target_repo_exists": _target_repo().is_dir(),
+        "target_repo_path": str(_target_repo()),
     }
 
 
@@ -69,102 +69,40 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
-async def _run_agent(subject_key: str, subject: str, mode: str) -> AsyncIterator[dict]:
-    """Spawn the Node runner and yield its NDJSON events as they arrive."""
-    try:
-        process = await asyncio.create_subprocess_exec(
-            "node",
-            str(RUNNER),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(PROJECT_ROOT),
-        )
-    except FileNotFoundError:
-        yield {
-            "type": "error",
-            "message": "Node.js is not available on PATH; cannot run the investigation runner.",
-        }
-        return
-    assert process.stdin is not None
-    assert process.stdout is not None
-    assert process.stderr is not None
-
-    async def write_request() -> None:
-        payload = json.dumps(
-            {
-                "mode": mode,
-                subject_key: subject,
-                "repo_path": os.environ.get("TARGET_REPO_PATH", "target-repo"),
-            }
-        ).encode()
-        process.stdin.write(payload)
-        await process.stdin.drain()
-        process.stdin.close()
-
-    stderr_tail: deque[bytes] = deque(maxlen=30)
-
-    async def drain_stderr() -> None:
-        async for chunk in process.stderr:
-            stderr_tail.append(chunk)
-
-    writer = asyncio.create_task(write_request())
-    stderr_task = asyncio.create_task(drain_stderr())
-    emitted_error = False
-
-    try:
-        async for raw_line in process.stdout:
-            line = raw_line.decode().strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # ignore non-NDJSON noise
-            if event.get("type") == "error":
-                emitted_error = True
-            yield event
-        try:
-            await writer
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            pass  # runner exited before reading the request; its error surfaces below
-        returncode = await process.wait()
-        if returncode != 0 and not emitted_error:
-            yield {
-                "type": "error",
-                "message": (
-                    "investigate runner failed: "
-                    + b"".join(stderr_tail).decode(errors="replace").strip()
-                    or f"exit code {returncode}"
-                ),
-            }
-    finally:
-        if process.returncode is None:
-            process.kill()
-        stderr_task.cancel()
-        try:
-            await stderr_task
-        except (asyncio.CancelledError, Exception):
-            pass
+CANONICAL_CHECKS = [
+    ("history", "History Analyst"),
+    ("docs", "Docs Analyst"),
+    ("dependents", "Dependents Mapper"),
+    ("tests", "Test Coverage Checker"),
+]
 
 
-async def _stream_mode_response(
-    mode: str, subject_key: str, subject: str
-) -> StreamingResponse:
-    """Shared SSE response for both modes."""
+async def _check_events(reports: CheckReports) -> AsyncIterator[dict]:
+    """Emit per-check lifecycle events, then run Gemini with the collected evidence."""
+    for _, display in CANONICAL_CHECKS:
+        yield {"type": "check_start", "agent_id": display, "display_name": display}
+    result = await asyncio.to_thread(gemini_client.merge_verdict, reports)
+    for _, display in CANONICAL_CHECKS:
+        yield {"type": "check_finish", "agent_id": display, "display_name": display}
+    yield {"type": "result", "mode": "investigate", **result.model_dump()}
+
+
+@app.post("/investigate")
+async def investigate(req: InvestigateRequest) -> StreamingResponse:
+    subject = req.target.strip()
 
     async def stream() -> AsyncIterator[str]:
         try:
+            reports = await asyncio.to_thread(checks.collect, subject)
             async with asyncio.timeout(AGENT_TIMEOUT_SECONDS):
-                async for event in _run_agent(subject_key, subject, mode):
+                async for event in _check_events(reports):
                     yield _sse(event)
+        except checks.CheckError as e:
+            yield _sse({"type": "error", "message": str(e)})
         except TimeoutError:
-            yield _sse(
-                {
-                    "type": "error",
-                    "message": f"Investigation timed out after {AGENT_TIMEOUT_SECONDS:.0f}s",
-                }
-            )
+            yield _sse({"type": "error", "message": f"Investigation timed out after {AGENT_TIMEOUT_SECONDS:.0f}s"})
+        except Exception as e:  # noqa: BLE001 - surfaced to the UI on purpose
+            yield _sse({"type": "error", "message": gemini_client.friendly_error(e)})
 
     return StreamingResponse(
         stream(),
@@ -173,30 +111,60 @@ async def _stream_mode_response(
     )
 
 
-def _require_target_repo() -> None:
-    if not _target_repo().is_dir():
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "No target repo found. Clone the repo you want to investigate "
-                "into ./target-repo (or set TARGET_REPO_PATH)."
-            ),
-        )
-
-
-@app.post("/investigate")
-async def investigate(req: InvestigateRequest) -> StreamingResponse:
-    subject = req.target.strip()
-    if not subject:
-        raise HTTPException(status_code=400, detail="target must not be blank")
-    _require_target_repo()
-    return await _stream_mode_response("investigate", "target", subject)
-
-
 @app.post("/heatmap")
 async def heatmap(req: HeatmapRequest) -> StreamingResponse:
-    subject = req.file.strip()
-    if not subject:
-        raise HTTPException(status_code=400, detail="file must not be blank")
-    _require_target_repo()
-    return await _stream_mode_response("heatmap", "file", subject)
+    file = req.file.strip()
+
+    async def stream() -> AsyncIterator[str]:
+        try:
+            functions = await asyncio.to_thread(checks.list_functions, file)
+            if not functions:
+                yield _sse(
+                    {
+                        "type": "result",
+                        "mode": "heatmap",
+                        "file": file,
+                        "functions": [],
+                        "summary": "No functions found in that file.",
+                    }
+                )
+                return
+
+            for _, display in CANONICAL_CHECKS:
+                yield {"type": "check_start", "agent_id": display, "display_name": display}
+
+            def collect_all() -> dict[str, CheckReports]:
+                out: dict[str, CheckReports] = {}
+                for f in functions:
+                    try:
+                        out[f["name"]] = checks.collect(f"{file}:{f['line']}")
+                    except checks.CheckError as e:
+                        out[f["name"]] = CheckReports(
+                            history=f"INCONCLUSIVE: yes\nNOTES: {e}",
+                            docs="INCONCLUSIVE: yes",
+                            dependents="INCONCLUSIVE: yes",
+                            tests="INCONCLUSIVE: yes",
+                            inconclusive=["history", "docs", "dependents", "tests"],
+                        )
+                return out
+
+            reports_by_function = await asyncio.to_thread(collect_all)
+            merged = await asyncio.wait_for(
+                asyncio.to_thread(gemini_client.rank_heatmap, file, reports_by_function),
+                timeout=GEMINI_TIMEOUT_SECONDS,
+            )
+            for _, display in CANONICAL_CHECKS:
+                yield {"type": "check_finish", "agent_id": display, "display_name": display}
+            yield _sse({"type": "result", "mode": "heatmap", **merged.model_dump()})
+        except checks.CheckError as e:
+            yield _sse({"type": "error", "message": str(e)})
+        except TimeoutError:
+            yield _sse({"type": "error", "message": f"Heatmap timed out after {AGENT_TIMEOUT_SECONDS:.0f}s"})
+        except Exception as e:  # noqa: BLE001 - surfaced to the UI on purpose
+            yield _sse({"type": "error", "message": gemini_client.friendly_error(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

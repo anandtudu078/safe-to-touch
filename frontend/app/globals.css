@@ -391,6 +391,17 @@ button:disabled {
   font-size: 0.75rem;
 }
 
+.heat-conf {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .heat-reason {
   color: var(--muted);
   font-size: 0.8rem;

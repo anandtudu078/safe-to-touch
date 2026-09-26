@@ -17,32 +17,35 @@ No login, no database, no saved history. One input, one verdict.
   test-coverage-checker.ts   # does any test exercise this path
 target-repo/                 # clone the repo you want to investigate here (gitignored)
 backend/
-  runner/investigate.mjs     # Node runner: SDK run -> NDJSON events on stdout
-  app/main.py                # FastAPI: POST /investigate (SSE) + GET /health
-frontend/
-  app/page.tsx               # Next.js UI: two modes, live checks, cards
-scripts/
-  smoke-agents.mjs           # validates all .agents definitions load
+  checks.py                  # 4 deterministic evidence collectors (real git/grep)
+  gemini_client.py           # Gemini merge: one-line findings + verdict rules + ranking
+  schemas.py                 # output contracts shared with the UI
+  main.py                    # FastAPI: POST /investigate + POST /heatmap (SSE)
+frontend/                    # Next.js UI: two modes, live checks, cards
+scripts/                     # smoke + contract + secret checks
 ```
+
+**Architecture (v0.3):** the 4 checks are deterministic Python — real `git blame`,
+`git log`, `git grep`, and doc/test file scans — so they cannot fail mid-demo.
+Gemini (free tier) is used only where language matters: one-line findings, applying
+the deterministic verdict rules, and ranking heatmap results. The old Node/Codebuff
+bridge was removed.
 
 ## Run it now (CLI)
 
+The investigation logic lives in the backend; run the UI:
+
 ```bash
-npm install
+cp .env.example .env         # add a free GEMINI_API_KEY from aistudio.google.com
+python -m venv .venv
+./.venv/Scripts/pip install -r backend/requirements.txt   # Windows Git Bash
+# .venv/bin/pip install -r backend/requirements.txt       # macOS/Linux
+
+./.venv/Scripts/python -m uvicorn backend.app.main:app --port 8000
+
 git clone <some-real-repo> target-repo
-codebuff
-```
 
-Then inside Codebuff:
-
-```
-@Investigate Safety target-repo/src/utils/date.ts:120
-```
-
-or conversationally:
-
-```
-@Investigate Safety is parseDateString in target-repo/src/utils/date.ts safe to delete?
+cd frontend && npm install && npm run dev   # http://localhost:3000
 ```
 
 ## Verdict rules (deterministic, applied by the merge step)
@@ -58,12 +61,12 @@ inconclusive · **Low** = two or more inconclusive or the target couldn't be loc
 
 ## Backend
 
-FastAPI + one endpoint. The endpoint spawns a small Node runner that executes the
-`investigate-safety` mode via `@codebuff/sdk` (working directory pointed at the target
-repo) and streams its events back to the browser as SSE.
+FastAPI. Each request runs the 4 deterministic checks (real `git blame`, `git log`,
+`git grep`, doc/test scans) in a thread pool, then Gemini merges them into the verdict
+and streams the events back to the browser as SSE.
 
 ```bash
-cp .env.example .env        # add CODEBUFF_API_KEY from codebuff.com/api-keys
+cp .env.example .env        # add a free GEMINI_API_KEY from aistudio.google.com
 python -m venv .venv
 ./.venv/Scripts/pip install -r backend/requirements.txt   # Windows Git Bash
 # .venv/bin/pip install -r backend/requirements.txt       # macOS/Linux
