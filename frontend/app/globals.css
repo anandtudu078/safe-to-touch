@@ -205,6 +205,8 @@ button:disabled {
   border: 1px solid var(--border);
   padding: 5px 12px;
   border-radius: 999px;
+  /* Note: font-size is intentionally 0.8rem here (badge pill);
+     the plain text confidence in the finding row uses 0.85rem below. */
 }
 
 .verdict-safe {
@@ -234,8 +236,8 @@ button:disabled {
   background: rgba(210, 153, 34, 0.12);
 }
 
-.confidence {
-  color: var(--muted);
+/* Finding-row inline confidence text (not the pill badge above) */
+.finding .confidence {
   font-size: 0.85rem;
 }
 

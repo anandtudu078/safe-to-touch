@@ -52,7 +52,9 @@ class HeatmapRequest(BaseModel):
 
 
 def _target_repo() -> Path:
-    return PROJECT_ROOT / os.environ.get("TARGET_REPO_PATH", "target-repo")
+    raw = os.environ.get("TARGET_REPO_PATH", "target-repo")
+    candidate = Path(raw)
+    return candidate if candidate.is_absolute() else PROJECT_ROOT / raw
 
 
 @app.get("/health")
@@ -132,7 +134,7 @@ async def heatmap(req: HeatmapRequest) -> StreamingResponse:
                 return
 
             for _, display in CANONICAL_CHECKS:
-                yield {"type": "check_start", "agent_id": display, "display_name": display}
+                yield _sse({"type": "check_start", "agent_id": display, "display_name": display})
 
             def collect_all() -> dict[str, CheckReports]:
                 out: dict[str, CheckReports] = {}
@@ -155,12 +157,12 @@ async def heatmap(req: HeatmapRequest) -> StreamingResponse:
                 timeout=GEMINI_TIMEOUT_SECONDS,
             )
             for _, display in CANONICAL_CHECKS:
-                yield {"type": "check_finish", "agent_id": display, "display_name": display}
+                yield _sse({"type": "check_finish", "agent_id": display, "display_name": display})
             yield _sse({"type": "result", "mode": "heatmap", **merged.model_dump()})
         except checks.CheckError as e:
             yield _sse({"type": "error", "message": str(e)})
         except TimeoutError:
-            yield _sse({"type": "error", "message": f"Heatmap timed out after {AGENT_TIMEOUT_SECONDS:.0f}s"})
+            yield _sse({"type": "error", "message": f"Heatmap timed out after {GEMINI_TIMEOUT_SECONDS:.0f}s"})
         except Exception as e:  # noqa: BLE001 - surfaced to the UI on purpose
             yield _sse({"type": "error", "message": gemini_client.friendly_error(e)})
 

@@ -22,7 +22,11 @@ class CheckError(Exception):
 def _repo() -> Path:
     import os
 
-    repo = REPO_ROOT / os.environ.get("TARGET_REPO_PATH", "target-repo")
+    raw = os.environ.get("TARGET_REPO_PATH", "target-repo")
+    candidate = Path(raw)
+    # If the env var is an absolute path use it directly; otherwise treat it as
+    # relative to the project root (the default "target-repo" case).
+    repo = candidate if candidate.is_absolute() else REPO_ROOT / raw
     if not repo.is_dir():
         raise CheckError(
             "No target repo found. Clone the repo you want to investigate into "
@@ -101,7 +105,7 @@ def locate(repo: Path, target: str) -> tuple[str, int, str, list[str]]:
             file_ref = target.split(":")[0]
         else:
             # bare identifier: find its definition
-            hits = _search(repo, rf"(function\s+{re.escape(target)}|def\s+{target}\b|"
+            hits = _search(repo, rf"(function\s+{re.escape(target)}|def\s+{re.escape(target)}\b|"
                                rf"const\s+{re.escape(target)}\s*=|class\s+{re.escape(target)}\b)")
             if hits:
                 file_ref = hits[0][0]
@@ -131,7 +135,7 @@ def locate(repo: Path, target: str) -> tuple[str, int, str, list[str]]:
     names = [func]
     if 0 < line <= len(lines):
         seg = "\n".join(lines[line - 1 : line + 15])
-        names += re.findall(r"(?:function\s+(\\w+)|def\s+(\\w+)|const\s+(\\w+)\s*=)", seg) and [
+        names += [
             n for tup in re.findall(r"(?:function\s+(\w+)|def\s+(\w+)|const\s+(\w+)\s*=)", seg)
             for n in tup if n
         ]
