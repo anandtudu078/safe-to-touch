@@ -195,9 +195,17 @@ async def heatmap(req: HeatmapRequest) -> StreamingResponse:
     )
 
 
+# /favicon.ico must be registered BEFORE the StaticFiles mount at "/" so it
+# is not shadowed when the frontend export is present.
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(status_code=204)
+
+
 # --- Single-container serving -------------------------------------------------
 # The exported Next.js app (frontend/out), mounted LAST so it never shadows
-# /health, /investigate, or /heatmap. Absent locally unless you run the export.
+# /health, /investigate, /heatmap, or /favicon.ico. Absent locally unless you
+# run the export.
 FRONTEND_EXPORT = Path(os.environ.get("FRONTEND_EXPORT", str(PROJECT_ROOT / "frontend/out")))
 if FRONTEND_EXPORT.is_dir():
     app.mount("/", StaticFiles(directory=FRONTEND_EXPORT, html=True), name="frontend")
@@ -226,8 +234,3 @@ else:
     @app.get("/", include_in_schema=False)
     async def fallback_index() -> Response:
         return Response(FALLBACK_HTML, media_type="text/html")
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon() -> Response:
-    return Response(status_code=204)
