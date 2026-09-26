@@ -1,3 +1,14 @@
+---
+title: Should I Touch This
+emoji: 🔍
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+app_file: app.py
+pinned: false
+license: mit
+---
+
 # Should I Touch This (`safe-to-touch`)
 
 Paste a file + line from a legacy codebase. Four checks run **in parallel** —
@@ -15,7 +26,9 @@ Next.js frontend on a single port, with the demo repo baked in.
 ## Deploy your own Space
 
 1. Create a free account at huggingface.co → **New Space**
-   - SDK: **Docker** · Hardware: **CPU basic (free)** · Public or Private
+   - SDK: **Gradio → Blank** (the app serves its own FastAPI + UI on 7860)
+   - Hardware: **ZeroGPU (Free)** if CPU Basic is unavailable — we use no GPU
+   - Public visibility; the API key stays hidden as a Space secret
 2. Add the secret: Space → **Settings → Variables and secrets** →
    `GEMINI_API_KEY` = your free key from [aistudio.google.com](https://aistudio.google.com/)
 3. Push this repo as the Space:
@@ -24,6 +37,9 @@ Next.js frontend on a single port, with the demo repo baked in.
    git push space main
    ```
 4. Wait for **Building → Running**, then open the Space URL.
+
+The `README.md` frontmatter (title/sdk/app_file) is what the Gradio runtime reads;
+`app.py` boots uvicorn on 7860 and bakes the demo repo on first run.
 
 The demo repo ships inside the image — the Space is demo-ready the moment it boots.
 To analyze another codebase, its code must be in the container's `target-repo`
