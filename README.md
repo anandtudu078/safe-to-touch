@@ -19,7 +19,10 @@ target-repo/                 # clone the repo you want to investigate here (giti
 backend/
   runner/investigate.mjs     # Node runner: SDK run -> NDJSON events on stdout
   app/main.py                # FastAPI: POST /investigate (SSE) + GET /health
-frontend/                    # Next.js UI
+frontend/
+  app/page.tsx               # Next.js UI: input, live checks, results card
+scripts/
+  smoke-agents.mjs           # validates all .agents definitions load
 ```
 
 ## Run it now (CLI)
@@ -77,6 +80,28 @@ python -m venv .venv
   - `error` — any failure, as a message
 
 No auth, no database, no saved history.
+
+## Frontend
+
+One page: an input, an "Investigate" button, live status for the 4 parallel checks,
+and a single results card (verdict, confidence, per-check findings).
+
+```bash
+cd frontend
+npm install
+npm run dev   # http://localhost:3000
+```
+
+The frontend talks to the backend at `NEXT_PUBLIC_API_URL` (default
+`http://localhost:8000`) — see `.env.example`.
+
+## Verifying the setup
+
+```bash
+npm run smoke:agents   # all 5 agent definitions load and validate
+npm run typecheck      # agent definitions typecheck
+cd frontend && npm run typecheck && npm run build
+```
 
 ## Frontend (next)
 
