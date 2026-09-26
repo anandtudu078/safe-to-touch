@@ -75,8 +75,6 @@ def _search(repo: Path, pattern: str, exclude: str | None = None) -> list[tuple[
         path, _, text = line.partition(":")
         if exclude and path == exclude:
             continue
-        if path.startswith("target-repo") or path.startswith("node_modules"):
-            continue
         hits.append((path, text.strip()))
     return hits
 
@@ -159,9 +157,15 @@ def check_history(repo: Path, file_ref: str, line: int, func: str) -> str:
     log = _git(repo, "log", "--format=%h|%ad|%s", "--date=short", "--", file_ref)
     commits = [c for c in log.strip().splitlines() if c]
     n = len(commits)
-    hot = n >= 4 or any(HOTFIX_RE.search(c.split("|", 2)[-1]) for c in commits)
-    churn = "SINGLE_INTRO" if n == 1 else (f"LIGHT ({n} commits)" if n <= 3 else f"HOT ({n} commits)")
-    if hot:
+    has_fixup = any(HOTFIX_RE.search(c.split("|", 2)[-1]) for c in commits)
+    hot = n >= 4 or has_fixup
+    if n == 1:
+        churn = "SINGLE_INTRO"
+    elif hot:
+        churn = f"HOT ({n} commits)"
+    else:
+        churn = f"LIGHT ({n} commits)"
+    if has_fixup:
         churn += ", messages include fix/hotfix/revert-style commits"
     suspicious = "yes" if hot else "no"
 

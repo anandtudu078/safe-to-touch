@@ -127,9 +127,9 @@ async function investigate() {
       if (done) break;
       buf += dec.decode(value, { stream: true });
       let i;
-      while ((i = buf.indexOf('\\n\\n')) !== -1) {
+      while ((i = buf.indexOf('\n\n')) !== -1) {
         const frame = buf.slice(0, i); buf = buf.slice(i + 2);
-        const line = frame.split('\\n').find(l => l.startsWith('data: '));
+        const line = frame.split('\n').find(l => l.startsWith('data: '));
         if (line) handle(JSON.parse(line.slice(6)));
       }
     }

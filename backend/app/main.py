@@ -37,7 +37,8 @@ app = FastAPI(title="Should I Touch This", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:7860"],
+    allow_origin_regex=r"https://.*\.hf\.space",
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
@@ -105,7 +106,7 @@ async def _check_events(reports: CheckReports) -> AsyncIterator[str]:
         yield _sse({"type": "check_start", "agent_id": display, "display_name": display})
     result = await asyncio.wait_for(
         asyncio.to_thread(gemini_client.merge_verdict, reports),
-        timeout=AGENT_TIMEOUT_SECONDS,
+        timeout=GEMINI_TIMEOUT_SECONDS,
     )
     for _, display in CANONICAL_CHECKS:
         yield _sse({"type": "check_finish", "agent_id": display, "display_name": display})
@@ -197,7 +198,7 @@ async def heatmap(req: HeatmapRequest) -> StreamingResponse:
 # --- Single-container serving -------------------------------------------------
 # The exported Next.js app (frontend/out), mounted LAST so it never shadows
 # /health, /investigate, or /heatmap. Absent locally unless you run the export.
-FRONTEND_EXPORT = Path(os.environ.get("FRONTEND_EXPORT", PROJECT_ROOT / "frontend/out"))
+FRONTEND_EXPORT = Path(os.environ.get("FRONTEND_EXPORT", str(PROJECT_ROOT / "frontend/out")))
 if FRONTEND_EXPORT.is_dir():
     app.mount("/", StaticFiles(directory=FRONTEND_EXPORT, html=True), name="frontend")
     print(f"[startup] UI mounted from {FRONTEND_EXPORT}", flush=True)
