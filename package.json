@@ -8,7 +8,9 @@
     "typecheck": "tsc --noEmit",
     "smoke:agents": "node scripts/smoke-agents.mjs",
     "smoke:sse": "node scripts/sse-smoke.mjs",
-    "smoke:orchestrator": "node scripts/smoke-orchestrator.mjs"
+    "smoke:orchestrator": "node scripts/smoke-orchestrator.mjs",
+    "smoke:contract": "node scripts/contract-check.mjs",
+    "check:secrets": "node scripts/check-secrets.mjs"
   },
   "dependencies": {
     "@codebuff/sdk": "^0.10.7"
