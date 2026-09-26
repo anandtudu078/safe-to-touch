@@ -18,7 +18,7 @@ from typing import AsyncIterator
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -184,3 +184,26 @@ else:
         "Build the frontend (cd frontend && npm run build) or set FRONTEND_EXPORT.",
         flush=True,
     )
+    try:
+        entries = sorted(p.name for p in PROJECT_ROOT.iterdir())
+        print(f"[startup] repo root contains: {entries}", flush=True)
+        fe = PROJECT_ROOT / "frontend"
+        if fe.is_dir():
+            print(f"[startup] frontend/ contains: {sorted(p.name for p in fe.iterdir())}", flush=True)
+        else:
+            print("[startup] frontend/ directory itself is MISSING", flush=True)
+    except Exception as e:  # noqa: BLE001 - diagnostics only
+        print(f"[startup] dir listing failed: {e}", flush=True)
+
+    # Self-contained fallback UI baked into the app: the demo always works,
+    # even on runtimes that do not hand over every tracked directory.
+    from .fallback_ui import FALLBACK_HTML
+
+    @app.get("/", include_in_schema=False)
+    async def fallback_index() -> Response:
+        return Response(FALLBACK_HTML, media_type="text/html")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(status_code=204)
