@@ -103,7 +103,10 @@ async def _check_events(reports: CheckReports) -> AsyncIterator[str]:
     """Emit per-check lifecycle events, then run Gemini with the collected evidence."""
     for _, display in CANONICAL_CHECKS:
         yield _sse({"type": "check_start", "agent_id": display, "display_name": display})
-    result = await asyncio.to_thread(gemini_client.merge_verdict, reports)
+    result = await asyncio.wait_for(
+        asyncio.to_thread(gemini_client.merge_verdict, reports),
+        timeout=AGENT_TIMEOUT_SECONDS,
+    )
     for _, display in CANONICAL_CHECKS:
         yield _sse({"type": "check_finish", "agent_id": display, "display_name": display})
     yield _sse({"type": "result", "mode": "investigate", **result.model_dump()})
@@ -116,9 +119,8 @@ async def investigate(req: InvestigateRequest) -> StreamingResponse:
     async def stream() -> AsyncIterator[str]:
         try:
             reports = await asyncio.to_thread(checks.collect, subject)
-            async with asyncio.timeout(AGENT_TIMEOUT_SECONDS):
-                async for event in _check_events(reports):
-                    yield event
+            async for event in _check_events(reports):
+                yield event
         except checks.CheckError as e:
             yield _sse({"type": "error", "message": str(e)})
         except TimeoutError:
