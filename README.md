@@ -38,13 +38,9 @@ The verdict rules are deterministic: the same evidence always gives the same ver
 
 - Get a free API key at [aistudio.google.com](https://aistudio.google.com/) and
   put it in `.env` (copy `.env.example` as a starting point):
-  `GEMINI_API_KEY=your-key`
-- Point the tool at the codebase you want to analyze. It must be a git repo on
-  disk with real commit history:
-  - Use the built-in synthetic demo repo (recreate it with
-    `bash scripts/create-demo-repo.sh`), **or**
-  - Clone your real repo: `git clone <repo-url> target-repo`
-  - A different location? Set `TARGET_REPO_PATH` in `.env`.
+  `GEMINI_API_KEY=your-key` — no quotes, no spaces around `=`.
+- The built-in synthetic demo repo is baked in and auto-connected, so you can
+  try the tool immediately.
 - Sanity check: `curl http://127.0.0.1:8000/health` → expect
   `"api_key_set": true` and `"target_repo_exists": true`.
 
@@ -60,7 +56,31 @@ python -m uvicorn backend.app.main:app --port 8000   # backend
 cd frontend && npm run dev                            # UI on http://localhost:3000
 ```
 
-## 3. Use the UI
+## 3. Use the UI — the flow is **connect → edit → investigate**
+
+### Step 1 · Connect a repo (required)
+
+The investigate tools stay hidden until a repo is connected — the page shows a
+gate message instead. Click **⚙ Connect repo** and paste either:
+
+- a **git URL** (`https://github.com/org/repo.git` or ssh) — it is cloned
+  automatically into `target-repo-connected/` (each clone replaces the previous
+  one), or
+- an **absolute local path** to an existing repo on disk.
+
+The badge turns green: `● repo-name · branch · N files`. No restart needed —
+everything (checks, file list, editor) retargets instantly. This runtime
+connection overrides `TARGET_REPO_PATH` from `.env`; restarting the backend
+reverts to the `.env` default. Use **⚙ Switch repo** any time.
+
+### Step 2 · Edit files (optional)
+
+Click **✏️ Edit files**, pick a file from the sidebar, make your change, and
+**Save** — it writes straight back to the connected repo (Discard and an
+"unsaved" indicator included). A typical loop: edit the risky code, then
+re-investigate to see whether the verdict improves.
+
+### Step 3 · Investigate
 
 1. **Pick a mode** (tabs at the top):
    - **One line** — investigate a single line/function
@@ -72,8 +92,8 @@ cd frontend && npm run dev                            # UI on http://localhost:3
    | One line | `src/utils/date.ts:120`, `parseDateString in src/date.ts`, or a file path |
    | Whole file | `src/utils/date.ts` |
 
-   Or click **📂 Browse files** to search the tracked files of the target repo
-   and pick one (a pick auto-appends `:1` in One line mode).
+   Or click **📂 Browse files** to search the tracked files of the connected
+   repo and pick one (a pick auto-appends `:1` in One line mode).
 3. **Click Investigate / Scan file.** Four check rows animate
    pending → running → done: History, Docs, Dependents, Tests.
 4. **Read the verdict card:** verdict + confidence + one-line finding per check.
@@ -86,8 +106,10 @@ cd frontend && npm run dev                            # UI on http://localhost:3
 | Symptom | Fix |
 |---|---|
 | `/health` shows `api_key_set: false` | `.env` missing or backend started from the wrong directory — restart from repo root |
-| `/health` shows `target_repo_exists: false` | Repo cloned elsewhere — set `TARGET_REPO_PATH` in `.env` |
-| Error mentions GEMINI_API_KEY not set / timeouts | Check the key and free-tier limits; the 4 raw checks themselves run without a key |
+| `/health` shows `target_repo_exists: false` | Repo cloned elsewhere — set `TARGET_REPO_PATH` in `.env`, or use **⚙ Connect repo** in the UI |
+| Error: `503 UNAVAILABLE` / high demand | Transient free-tier spike — the backend already retries and falls back to the lite model; if it still fails, retry in a minute |
+| Error: model is "no longer available to new users" | Your `GEMINI_MODEL` pins a retired model — remove the line or use `gemini-flash-latest` |
+| Error mentions GEMINI_API_KEY not set / rejected | Check the key; AI Studio keys are unquoted in `.env`. The 4 raw checks themselves run without a key |
 | Verdict seems off | Try a more specific target (`file.ts:line` or `func in file.ts`) |
 
 ---
@@ -115,8 +137,8 @@ The `README.md` frontmatter (title/sdk/app_file) is what the Gradio runtime read
 `app.py` boots uvicorn on 7860 and bakes the demo repo on first run.
 
 The demo repo ships inside the image — the Space is demo-ready the moment it boots.
-To analyze another codebase, its code must be in the container's `target-repo`
-(wired in via `TARGET_REPO_PATH`); the paste-a-GitHub-URL feature is planned next.
+To analyze another codebase, use **⚙ Connect repo** in the UI (paste a git URL
+or a local path) — no redeploy needed.
 
 ## Run the container locally
 
