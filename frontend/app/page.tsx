@@ -79,7 +79,7 @@ const SECTION_BY_AGENT: Record<string, keyof Evidence> = {
 }
 
 // ---------------------------------------------------------------------------
-// RepoConnector — connect a remote URL or local path as the active repo
+// RepoConnector — step 1: connect a remote URL or local path as the active repo
 // ---------------------------------------------------------------------------
 
 type RepoConnectorProps = {
@@ -118,7 +118,7 @@ function RepoConnector({ onConnected }: RepoConnectorProps) {
       })
       const data = await res.json()
       if (!res.ok) {
-        setConnectError(data.detail || `Error ${res.status}`)
+        setConnectError(typeof data.detail === 'string' ? data.detail : `Error ${res.status}`)
       } else {
         setStatus(data as RepoStatus)
         setSource('')
@@ -152,7 +152,7 @@ function RepoConnector({ onConnected }: RepoConnectorProps) {
           onClick={() => setOpen((v) => !v)}
           title={open ? 'Close' : 'Connect a different repo'}
         >
-          {open ? '✕' : '⚙ Connect repo'}
+          {open ? '✕' : status?.connected ? '⚙ Switch repo' : '⚙ Connect repo'}
         </button>
       </div>
 
@@ -282,7 +282,7 @@ function FileBrowser({ onSelect, mode, refreshKey }: FileBrowserProps) {
 }
 
 // ---------------------------------------------------------------------------
-// FileEditor — open any repo file, edit it in a textarea, save back
+// FileEditor — step 2: open any repo file, edit it in a textarea, save back
 // ---------------------------------------------------------------------------
 
 type FileEditorProps = {
@@ -463,7 +463,7 @@ function FileEditor({ refreshKey }: FileEditorProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Main page
+// Main page — flow: 1) connect a repo  2) (optional) edit files  3) investigate
 // ---------------------------------------------------------------------------
 
 export default function Home() {
@@ -477,6 +477,15 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   // Bumped whenever a new repo is connected — forces FileBrowser + FileEditor to reload
   const [repoRefreshKey, setRepoRefreshKey] = useState(0)
+  // The connection gate: tools appear only once a repo is connected
+  const [repoConnected, setRepoConnected] = useState(false)
+
+  useEffect(() => {
+    fetch(`${API_BASE}/repo/status`)
+      .then((r) => r.json())
+      .then((d: RepoStatus) => setRepoConnected(Boolean(d.connected)))
+      .catch(() => {})
+  }, [])
 
   async function run() {
     const subject = target.trim()
@@ -549,166 +558,182 @@ export default function Home() {
     }
   }
 
+  function clearOutput() {
+    setResult(null)
+    setHeatmap(null)
+    setOpenEvidence(null)
+    setError(null)
+    setChecks(INITIAL_CHECKS.map((c) => ({ ...c, status: 'pending' })))
+  }
+
   return (
     <main>
       <h1>
         Should I <span className="touch">Touch</span> This?
       </h1>
       <p className="tagline">
-        Paste a file + line from a legacy codebase. Four checks run in parallel. One verdict.
+        Connect a repo. Make changes. Investigate before you touch risky code.
       </p>
 
-      {/* ── Repo connector ─────────────────────────────────────────── */}
+      {/* ── Step 1: repo connector (always visible) ─────────────────── */}
       <RepoConnector
         onConnected={() => {
+          setRepoConnected(true)
           setRepoRefreshKey((k) => k + 1)
           setTarget('')
-          setResult(null)
-          setHeatmap(null)
-          setError(null)
+          clearOutput()
         }}
       />
 
-      <div className="mode-tabs" role="tablist">
-        <button
-          role="tab"
-          aria-selected={mode === 'investigate'}
-          className={mode === 'investigate' ? 'tab active' : 'tab'}
-          onClick={() => setMode('investigate')}
-        >
-          One line
-        </button>
-        <button
-          role="tab"
-          aria-selected={mode === 'heatmap'}
-          className={mode === 'heatmap' ? 'tab active' : 'tab'}
-          onClick={() => setMode('heatmap')}
-        >
-          Whole file
-        </button>
-      </div>
-
-      <div className="input-row">
-        <input
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && run()}
-          placeholder={
-            mode === 'investigate'
-              ? 'src/utils/date.ts:120  or  parseDateString in src/date.ts'
-              : 'src/utils/date.ts'
-          }
-          disabled={investigating}
-        />
-        <button onClick={run} disabled={investigating || !target.trim()}>
-          {investigating ? 'Scanning…' : mode === 'investigate' ? 'Investigate' : 'Scan file'}
-        </button>
-      </div>
-
-      <FileBrowser
-        mode={mode}
-        refreshKey={repoRefreshKey}
-        onSelect={(file) => {
-          setTarget(file)
-          setResult(null)
-          setHeatmap(null)
-          setError(null)
-        }}
-      />
-
-      {/* ── File editor ────────────────────────────────────────────── */}
-      <FileEditor refreshKey={repoRefreshKey} />
-
-      {(investigating || checks.some((c) => c.status !== 'pending')) && (
-        <ul className="checks">
-          {checks.map((c) => (
-            <li key={c.key} className={`check check-${c.status}`}>
-              <span className="dot" />
-              {c.label}
-              <em>
-                {c.status === 'pending' && 'waiting'}
-                {c.status === 'running' && 'running…'}
-                {c.status === 'done' && 'done'}
-              </em>
-            </li>
-          ))}
-        </ul>
+      {!repoConnected && (
+        <p className="connect-gate">
+          ↑ Connect a repository first — paste a git URL or an absolute local path.
+          The 4 checks (history, docs, dependents, tests) run against the connected repo.
+        </p>
       )}
 
-      {error && <div className="error">{error}</div>}
-
-      {result && (
-        <section className={`card ${VERDICT_CLASS[result.verdict] ?? 'verdict-review'}`}>
-          <div className="card-head">
-            <span className="verdict">{result.verdict}</span>
-            <span className="confidence">{result.confidence} confidence</span>
+      {repoConnected && (
+        <>
+          <div className="mode-tabs" role="tablist">
+            <button
+              role="tab"
+              aria-selected={mode === 'investigate'}
+              className={mode === 'investigate' ? 'tab active' : 'tab'}
+              onClick={() => setMode('investigate')}
+            >
+              One line
+            </button>
+            <button
+              role="tab"
+              aria-selected={mode === 'heatmap'}
+              className={mode === 'heatmap' ? 'tab active' : 'tab'}
+              onClick={() => setMode('heatmap')}
+            >
+              Whole file
+            </button>
           </div>
-          <p className="summary">{result.summary}</p>
-          <dl>
-            {checks.map((c) => {
-              const key = SECTION_BY_AGENT[c.key]
-              const isOpen = openEvidence === key
-              const raw = result.evidence?.[key]
-              return (
-                <div key={c.key} className="finding">
-                  <dt>{c.label}:</dt>
-                  <dd>{(result[key] as string) ?? '—'}</dd>
-                  {raw && (
-                    <button
-                      className={`chevron ${isOpen ? 'open' : ''}`}
-                      aria-label={`Toggle ${c.label} evidence`}
-                      onClick={() => setOpenEvidence(isOpen ? null : key)}
-                    >
-                      ▸
-                    </button>
-                  )}
-                  {isOpen && raw && (
-                    <pre className="evidence">{raw}</pre>
-                  )}
-                </div>
-              )
-            })}
-          </dl>
-          {result.suggestions && result.suggestions.length > 0 && (
-            <div className="suggestions">
-              <h2>Next steps</h2>
-              <ul>
-                {result.suggestions.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
-      )}
 
-      {heatmap && (
-        <section className="card heatmap">
-          <div className="card-head">
-            <span className="verdict heatmap-title">Risk heatmap</span>
-            <span className="confidence">{heatmap.file}</span>
+          <div className="input-row">
+            <input
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && run()}
+              placeholder={
+                mode === 'investigate'
+                  ? 'src/utils/date.ts:120  or  parseDateString in src/date.ts'
+                  : 'src/utils/date.ts'
+              }
+              disabled={investigating}
+            />
+            <button onClick={run} disabled={investigating || !target.trim()}>
+              {investigating ? 'Scanning…' : mode === 'investigate' ? 'Investigate' : 'Scan file'}
+            </button>
           </div>
-          <p className="summary">{heatmap.summary}</p>
-          {heatmap.functions.length === 0 ? (
-            <p className="empty">No functions found in that file.</p>
-          ) : (
-            <ul className="heat-list">
-              {heatmap.functions.map((f, i) => (
-                <li key={`${f.name}-${i}`} className={`heat-row ${VERDICT_CLASS[f.verdict] ?? 'verdict-review'}`}>
-                  <span className={`heat-badge ${VERDICT_CLASS[f.verdict] ?? 'verdict-review'}`}>
-                    {f.verdict}
-                  </span>
-                  <span className="heat-name">
-                    {f.name}
-                    <em>:{f.line}</em>
-                  </span>
-                  <span className="heat-conf">{f.confidence}</span>
-                  <span className="heat-reason">{f.reason}</span>
+
+          <FileBrowser
+            mode={mode}
+            refreshKey={repoRefreshKey}
+            onSelect={(file) => {
+              setTarget(file)
+              clearOutput()
+            }}
+          />
+
+          {/* ── Step 2: file editor ──────────────────────────────────── */}
+          <FileEditor refreshKey={repoRefreshKey} />
+
+          {(investigating || checks.some((c) => c.status !== 'pending')) && (
+            <ul className="checks">
+              {checks.map((c) => (
+                <li key={c.key} className={`check check-${c.status}`}>
+                  <span className="dot" />
+                  {c.label}
+                  <em>
+                    {c.status === 'pending' && 'waiting'}
+                    {c.status === 'running' && 'running…'}
+                    {c.status === 'done' && 'done'}
+                  </em>
                 </li>
               ))}
             </ul>
           )}
-        </section>
+
+          {error && <div className="error">{error}</div>}
+
+          {result && (
+            <section className={`card ${VERDICT_CLASS[result.verdict] ?? 'verdict-review'}`}>
+              <div className="card-head">
+                <span className="verdict">{result.verdict}</span>
+                <span className="confidence">{result.confidence} confidence</span>
+              </div>
+              <p className="summary">{result.summary}</p>
+              <dl>
+                {checks.map((c) => {
+                  const key = SECTION_BY_AGENT[c.key]
+                  const isOpen = openEvidence === key
+                  const raw = result.evidence?.[key]
+                  return (
+                    <div key={c.key} className="finding">
+                      <dt>{c.label}:</dt>
+                      <dd>{(result[key] as string) ?? '—'}</dd>
+                      {raw && (
+                        <button
+                          className={`chevron ${isOpen ? 'open' : ''}`}
+                          aria-label={`Toggle ${c.label} evidence`}
+                          onClick={() => setOpenEvidence(isOpen ? null : key)}
+                        >
+                          ▸
+                        </button>
+                      )}
+                      {isOpen && raw && (
+                        <pre className="evidence">{raw}</pre>
+                      )}
+                    </div>
+                  )
+                })}
+              </dl>
+              {result.suggestions && result.suggestions.length > 0 && (
+                <div className="suggestions">
+                  <h2>Next steps</h2>
+                  <ul>
+                    {result.suggestions.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+
+          {heatmap && (
+            <section className="card heatmap">
+              <div className="card-head">
+                <span className="verdict heatmap-title">Risk heatmap</span>
+                <span className="confidence">{heatmap.file}</span>
+              </div>
+              <p className="summary">{heatmap.summary}</p>
+              {heatmap.functions.length === 0 ? (
+                <p className="empty">No functions found in that file.</p>
+              ) : (
+                <ul className="heat-list">
+                  {heatmap.functions.map((f, i) => (
+                    <li key={`${f.name}-${i}`} className={`heat-row ${VERDICT_CLASS[f.verdict] ?? 'verdict-review'}`}>
+                      <span className={`heat-badge ${VERDICT_CLASS[f.verdict] ?? 'verdict-review'}`}>
+                        {f.verdict}
+                      </span>
+                      <span className="heat-name">
+                        {f.name}
+                        <em>:{f.line}</em>
+                      </span>
+                      <span className="heat-conf">{f.confidence}</span>
+                      <span className="heat-reason">{f.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+        </>
       )}
     </main>
   )

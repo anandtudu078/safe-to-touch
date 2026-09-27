@@ -48,6 +48,11 @@ h1 {
   font-size: 0.9rem;
 }
 
+/* With results piling up below, start content higher on connected pages */
+main {
+  padding-top: 40px;
+}
+
 .input-row {
   display: flex;
   gap: 8px;
@@ -637,6 +642,25 @@ button:disabled {
   margin-top: 8px;
   font-size: 0.8rem;
   color: var(--red);
+}
+
+/* Gate message shown when no repo is connected yet */
+
+.connect-gate {
+  width: 100%;
+  max-width: 640px;
+  margin: 4px 0 20px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+/* When tools are gated away, keep the page top-aligned instead of centered */
+main:has(.repo-connected) {
+  justify-content: flex-start;
 }
 
 /* ── File editor ────────────────────────────────────────────────────────────── */

@@ -12,7 +12,9 @@ from pydantic import ValidationError
 
 from .schemas import CheckReports, HeatmapResult, VerdictResult
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+# Used when the primary model hammers into 503/429 on the shared free tier.
+FALLBACK_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"]
 
 _VERDICT_RULES = """Apply these rules EXACTLY, in order:
 RISKY if any of:
@@ -46,21 +48,45 @@ def _client_and_model() -> tuple[Any, str]:
 
 
 def _generate_structured(client: Any, prompt: str, schema: dict) -> dict:
+    import json
+    import time
+
     from google.genai import types
 
-    resp = client.models.generate_content(
-        model=MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=schema,
-            temperature=0.1,
-        ),
-    )
-    text = resp.text or ""
-    import json
-
-    return json.loads(text)
+    # The flash aliases occasionally return 503 UNAVAILABLE / 429 quota errors
+    # on the shared free tier. Retry with backoff, then fall back to the lite
+    # alias (separate rate pool, usually quieter).
+    models_to_try = [MODEL] + [m for m in FALLBACK_MODELS if m != MODEL]
+    last_error: Exception | None = None
+    for model in models_to_try:
+        for attempt in range(2):
+            try:
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=schema,
+                        temperature=0.1,
+                    ),
+                )
+                text = resp.text or ""
+                return json.loads(text)
+            except Exception as e:  # noqa: BLE001 - retried/fallback on purpose
+                msg = str(e)
+                last_error = e
+                transient = (
+                    "503" in msg
+                    or "UNAVAILABLE" in msg
+                    or "429" in msg
+                    or "RESOURCE_EXHAUSTED" in msg
+                )
+                if transient:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise  # non-transient (bad key, bad schema, ...): surface it
+            break
+    raise last_error or RuntimeError("Gemini call failed for unknown reasons")
 
 
 def _findings_prompt(reports: CheckReports) -> str:

@@ -14,3 +14,4 @@ frontend/.env.local
 *.pyc
 .DS_Store
 .freebuff/
+target-repo-connected/

@@ -131,7 +131,7 @@ docker run -p 7860:7860 --env GEMINI_API_KEY=YOUR_KEY safe-to-touch
 | Var | Default | Notes |
 |---|---|---|
 | `GEMINI_API_KEY` | — | free key from aistudio.google.com (set as a Space **secret**) |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | any free-tier model |
+| `GEMINI_MODEL` | `gemini-flash-latest` | any free-tier model; the alias auto-follows the newest flash |
 | `TARGET_REPO_PATH` | `./target-repo` | repo under investigation |
 | `PORT` | `7860` | HF Spaces expects 7860 |
 | `AGENT_TIMEOUT_SECONDS` | `240` | whole-investigation cap (both endpoints) |
