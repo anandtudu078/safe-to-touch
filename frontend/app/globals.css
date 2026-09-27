@@ -489,13 +489,19 @@ button:disabled {
   overflow-y: auto;
 }
 
+.browser-item {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+
 .browser-file {
+  flex: 1;
+  min-width: 0;
   display: block;
-  width: 100%;
   background: transparent;
   border: none;
   border-radius: 0;
-  border-bottom: 1px solid var(--border);
   color: var(--muted);
   font: inherit;
   font-size: 0.8rem;
@@ -513,7 +519,32 @@ button:disabled {
   color: var(--blue);
 }
 
-.browser-list li:last-child .browser-file {
+.browser-path {
+  color: var(--border);
+  font-style: normal;
+  margin-left: 6px;
+  font-size: 0.72rem;
+}
+
+.browser-select {
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--blue);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.browser-select:hover {
+  background: var(--blue);
+  color: #0d1117;
+}
+
+.browser-list li:last-child .browser-item {
   border-bottom: none;
 }
 

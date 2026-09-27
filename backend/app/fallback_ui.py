@@ -83,10 +83,17 @@ FALLBACK_HTML = """<!doctype html>
   .browser-status { font-size:.8rem; color:var(--muted); padding:4px 0; }
   .browser-error { color:var(--red); }
   .browser-list { list-style:none; }
-  .browser-file { background:transparent; border:none; color:var(--blue); font:inherit;
-                  font-size:.8rem; cursor:pointer; padding:2px 0; text-align:left;
-                  width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .browser-item { display:flex; align-items:stretch; border-bottom:1px solid var(--border); }
+  .browser-list li:last-child .browser-item { border-bottom:none; }
+  .browser-file { flex:1; min-width:0; background:transparent; border:none; color:var(--blue);
+                  font:inherit; font-size:.8rem; cursor:pointer; padding:4px 6px; text-align:left;
+                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .browser-file:hover { text-decoration:underline; }
+  .browser-path { color:var(--border); font-style:normal; margin-left:6px; font-size:.72rem; }
+  .browser-select { background:transparent; border:none; border-left:1px solid var(--border);
+                    color:var(--blue); font:inherit; font-size:.72rem; font-weight:600;
+                    padding:4px 8px; cursor:pointer; white-space:nowrap; }
+  .browser-select:hover { background:var(--blue); color:#0d1117; }
 
   /* ── checks ─────────────────────────────────────────────────── */
   .checks { list-style:none; margin-top:20px; display:grid; gap:6px; width:100%;
@@ -358,9 +365,19 @@ function renderFileList(files) {
     return;
   }
   browserStatusEl.style.display = 'none';
-  browserListEl.innerHTML = files.map(f =>
-    `<li><button class="browser-file" onclick="pickFile(${JSON.stringify(f)})" title="${esc(f)}">${esc(f)}</button></li>`
-  ).join('');
+  browserListEl.innerHTML = files.map(f => {
+    const slash = f.lastIndexOf('/');
+    const name = slash === -1 ? f : f.slice(slash + 1);
+    const dir = slash === -1 ? '' : f.slice(0, slash);
+    const arg = JSON.stringify(f).replace(/'/g, '&#39;');
+    return `<li class="browser-item">` +
+      `<button class="browser-file" onclick='pickFile(${arg})' title="${esc(f)}">` +
+      (slash !== -1 ? '\U0001f4c4 ' : '') + esc(name) +
+      (dir ? `<em class="browser-path">${esc(dir)}</em>` : '') +
+      `</button>` +
+      `<button class="browser-select" onclick='pickFile(${arg})' title="Select ${esc(f)}" aria-label="Select ${esc(f)}">Select</button>` +
+      `</li>`;
+  }).join('');
 }
 
 function pickFile(f) {
