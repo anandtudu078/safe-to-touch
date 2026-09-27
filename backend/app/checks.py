@@ -11,7 +11,11 @@ from pathlib import Path
 from .schemas import CheckReports
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # backend/app -> backend -> root
-HOTFIX_RE = re.compile(r"\b(fix|bug|hotfix|revert|patch|crash|workaround)\b", re.I)
+# Strong churn signals: emergency repairs and rollbacks. A single conventional
+# `fix:` commit is healthy hygiene, not churn — it only counts toward HOT when
+# it repeats (>= 3).
+HOTFIX_RE = re.compile(r"\b(hotfix|revert|crash|workaround|emergency)\b", re.I)
+CONVENTIONAL_FIX_RE = re.compile(r"\b(fix|bug|patch)\b", re.I)
 TEST_HINTS = ("test", "spec", "tests/")
 
 
@@ -157,16 +161,23 @@ def check_history(repo: Path, file_ref: str, line: int, func: str) -> str:
     log = _git(repo, "log", "--format=%h|%ad|%s", "--date=short", "--", file_ref)
     commits = [c for c in log.strip().splitlines() if c]
     n = len(commits)
-    has_fixup = any(HOTFIX_RE.search(c.split("|", 2)[-1]) for c in commits)
-    hot = n >= 4 or has_fixup
+    subjects = [c.split("|", 2)[-1] for c in commits]
+    strong = [s for s in subjects if HOTFIX_RE.search(s)]
+    conventional = [s for s in subjects if CONVENTIONAL_FIX_RE.search(s)]
+    # HOT when: emergency signals (hotfix/revert/crash/...), OR heavy churn
+    # including repeated conventional fixes (>= 3 fix: commits), OR many commits.
+    has_fixup = bool(strong) or len(conventional) >= 3
+    hot = n >= 8 or has_fixup
     if n == 1:
         churn = "SINGLE_INTRO"
     elif hot:
         churn = f"HOT ({n} commits)"
     else:
         churn = f"LIGHT ({n} commits)"
-    if has_fixup:
-        churn += ", messages include fix/hotfix/revert-style commits"
+    if strong:
+        churn += ", messages include hotfix/revert-style commits"
+    elif len(conventional) >= 3:
+        churn += f", {len(conventional)} fix-style commits (repeated churn)"
     suspicious = "yes" if hot else "no"
 
     return (
