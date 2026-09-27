@@ -642,11 +642,6 @@ async function run() {
       headers: { 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
     });
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
     if (!res.ok || !res.body) {
       const d = await res.json().catch(() => null);
       throw new Error((d && d.detail) || ('HTTP ' + res.status));
