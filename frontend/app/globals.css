@@ -893,6 +893,103 @@ main:has(.repo-connected) {
   cursor: pointer;
 }
 
+/* ── Relations (blast-radius graph) ─────────────────────────────────────────── */
+.relations {
+  width: 100%;
+  max-width: 640px;
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.relations-toggle {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.relations-toggle:hover {
+  color: var(--blue);
+}
+
+.relations-body {
+  margin-top: 10px;
+}
+
+.graph-cols {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.graph-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+
+.graph-col h4 {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.graph-none {
+  font-size: 0.75rem;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.graph-node {
+  width: 100%;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--bg);
+}
+
+.graph-node.center {
+  border-width: 2px;
+  font-size: 0.78rem;
+}
+
+.graph-node.verdict-risky { border-color: var(--red); color: var(--red); background: rgba(248, 81, 73, 0.1); }
+.graph-node.verdict-review { border-color: var(--amber); color: var(--amber); background: rgba(210, 153, 34, 0.1); }
+.graph-node.verdict-safe { border-color: var(--green); color: var(--green); background: rgba(63, 185, 80, 0.1); }
+
+.graph-edges {
+  list-style: none;
+  margin-top: 10px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  display: grid;
+  gap: 3px;
+}
+
+.graph-edges b { color: var(--text); }
+.graph-edges em { color: var(--blue); font-style: normal; }
+
 .editor-save:disabled {
   opacity: 0.4;
   cursor: not-allowed;
