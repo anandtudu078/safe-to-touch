@@ -336,6 +336,56 @@ async def file_commit(req: FileCommitRequest) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.get("/graph")
+async def graph(file: str) -> dict:
+    """Blast-radius dependency graph centered on one file.
+
+    Nodes carry per-file verdicts (deterministic rules); edges carry the
+    symbols connecting the files.
+    """
+    repo = _target_repo()
+    if not repo.is_dir():
+        raise HTTPException(status_code=404, detail="No target repo found")
+
+    def build() -> dict:
+        file_ref, _line, _func, names = checks.locate(repo, file)
+        graph_data = checks.dependency_graph(file_ref, names)
+
+        def verdict_of(path: str) -> tuple[str, str]:
+            try:
+                reports = checks.collect(f"{path}:1")
+                v = gemini_client.rule_verdict(reports)
+                conf = "High" if not reports.inconclusive else "Low"
+                return v, conf
+            except checks.CheckError:
+                return "Needs Review", "Low"
+
+        nodes: dict[str, dict] = {}
+        v, conf = verdict_of(file_ref)
+        nodes[file_ref] = {"file": file_ref, "role": "center", "verdict": v, "confidence": conf}
+        for d in graph_data["dependencies"]:
+            if d["file"] not in nodes:
+                v, conf = verdict_of(d["file"])
+                nodes[d["file"]] = {"file": d["file"], "role": "dependency", "verdict": v, "confidence": conf}
+        for r in graph_data["dependents"]:
+            if r["file"] not in nodes:
+                v, conf = verdict_of(r["file"])
+                nodes[r["file"]] = {"file": r["file"], "role": "dependent", "verdict": v, "confidence": conf}
+        edges = [
+            {"from": d["file"], "to": file_ref, "labels": d["labels"], "kind": "depends_on"}
+            for d in graph_data["dependencies"]
+        ] + [
+            {"from": file_ref, "to": r["file"], "labels": r["labels"], "kind": "depended_on_by"}
+            for r in graph_data["dependents"]
+        ]
+        return {"center": file_ref, "nodes": list(nodes.values()), "edges": edges}
+
+    try:
+        return await asyncio.to_thread(build)
+    except checks.CheckError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 @app.get("/files")
 async def list_files() -> dict:
     """Return all source files tracked in the target repo, grouped by directory."""

@@ -399,3 +399,108 @@ def changed_regions() -> list[dict]:
             seen.add(key)
             unique.append(r)
     return unique
+
+
+# ------------------------------------------------------------- dependency graph
+
+
+def _resolve_import(repo: Path, source_file: str, spec: str) -> str | None:
+    """Resolve an import specifier to a tracked repo file, or None."""
+    if not spec.startswith("."):
+        return None  # bare package imports are external
+    base = (Path(source_file).parent / spec).as_posix()
+    candidates = [base] + [f"{base}{ext}" for ext in (
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", "/index.ts", "/index.js",
+    )]
+    for cand in candidates:
+        norm = Path(cand).as_posix()
+        if (repo / norm).is_file():
+            return norm
+    return None
+
+
+def _import_edges(repo: Path, file_ref: str) -> list[str]:
+    """Tracked repo files that file_ref imports from."""
+    src = _read(repo, file_ref)
+    if not src:
+        return []
+    specs: set[str] = set()
+    for m in re.finditer(
+        r"import[\s\S]*?from\s*['\"]([^'\"]+)['\"]|import\s*\(\s*['\"]([^'\"]+)['\"]\s*\)"
+        r"|require\s*\(\s*['\"]([^'\"]+)['\"]\s*\)|from\s+([\w.]+)\s+import",
+        src,
+    ):
+        spec = next((g for g in m.groups() if g), None)
+        if spec:
+            specs.add(spec)
+    resolved: list[str] = []
+    for spec in sorted(specs):
+        target = _resolve_import(repo, file_ref, spec)
+        if target and target != file_ref:
+            resolved.append(target)
+    return resolved
+
+
+def dependency_graph(file_ref: str, names: list[str], max_nodes: int = 24) -> dict:
+    """Blast-radius graph centered on file_ref.
+
+    Left column: files file_ref depends on (its imports).
+    Right column: files that depend on file_ref (its blast radius).
+    Edges carry labels: the symbols connecting the two files.
+    """
+    repo = _repo()
+    src = _read(repo, file_ref)
+    if not src:
+        raise CheckError(f"File not found in target repo: {file_ref}")
+
+    def _labels_for(hits: list[tuple[str, str]], other: str) -> list[str]:
+        out: list[str] = []
+        for _path, text in hits:
+            for name in names:
+                if re.search(rf"\b{re.escape(name)}\b", text):
+                    out.append(name)
+        return sorted(set(out))[:4]
+
+    # Left: what file_ref depends on
+    deps = _import_edges(repo, file_ref)[:8]
+    dep_nodes: list[dict] = []
+    for d in deps:
+        dep_names = [
+            m.group(1) or m.group(2)
+            for line in _read(repo, d).splitlines()
+            for m in [re.search(r"(?:function\s+(\w+)|(?:export\s+)?(?:async\s+)?def\s+(\w+))", line)]
+            if m
+        ][:6]
+        used_here = _labels_for(
+            [("", ln) for ln in _read(repo, file_ref).splitlines()], d
+        )
+        # symbols defined in d and referenced from file_ref
+        labels = sorted(set(n for n in dep_names if re.search(rf"\b{re.escape(n)}\b", src)))[:4]
+        if not labels:
+            labels = used_here[:2] or [Path(d).name]
+        dep_nodes.append({"file": d, "labels": labels})
+
+    # Right: what depends on file_ref (reuse grep-based dependents)
+    rev_nodes: list[dict] = []
+    seen_files: set[str] = set()
+    for name in names:
+        for path, text in _search(repo, re.escape(name), exclude=file_ref):
+            if path in seen_files or path == file_ref:
+                continue
+            if any(h in path for h in TEST_HINTS) or path.lower().endswith(NON_CODE_SUFFIXES):
+                continue
+            seen_files.add(path)
+            labels = sorted(set(
+                n for n in names if re.search(rf"\b{re.escape(n)}\b", text)
+            ))[:4] or [name]
+            rev_nodes.append({"file": path, "labels": labels})
+            if len(rev_nodes) >= 8:
+                break
+        if len(rev_nodes) >= 8:
+            break
+
+    return {
+        "center": file_ref,
+        "dependencies": dep_nodes,
+        "dependents": rev_nodes,
+    }

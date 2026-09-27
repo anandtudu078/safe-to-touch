@@ -171,6 +171,28 @@ FALLBACK_HTML = """<!doctype html>
                border:1px solid var(--border); border-radius:6px; font:inherit;
                font-size:.78rem; padding:8px; resize:vertical; }
   .editor-ta:focus { outline:1px solid var(--blue); }
+
+  /* ── relations (blast-radius graph) ─────────────────────────── */
+  .relations { width:100%; max-width:640px; margin-top:16px; border:1px solid var(--border);
+               border-radius:6px; background:var(--panel); padding:10px 12px; text-align:left; }
+  .relations-toggle { background:transparent; border:none; color:var(--muted); font:inherit;
+                      font-size:.8rem; font-weight:600; cursor:pointer; padding:0; }
+  .relations-toggle:hover { color:var(--blue); }
+  .graph-cols { display:flex; gap:10px; align-items:stretch; margin-top:10px; }
+  .graph-col { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; align-items:center; }
+  .graph-col h4 { font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .graph-none { font-size:.75rem; color:var(--muted); opacity:.7; }
+  .graph-node { width:100%; font:inherit; font-size:.72rem; font-weight:600; padding:6px 8px;
+                border-radius:6px; border:1px solid var(--border); cursor:pointer; overflow:hidden;
+                text-overflow:ellipsis; white-space:nowrap; background:var(--bg); }
+  .graph-node.center { border-width:2px; font-size:.78rem; }
+  .graph-node.g-risky { border-color:var(--red); color:var(--red); background:rgba(248,81,73,.1); }
+  .graph-node.g-review { border-color:var(--amber); color:var(--amber); background:rgba(210,153,34,.1); }
+  .graph-node.g-safe { border-color:var(--green); color:var(--green); background:rgba(63,185,80,.1); }
+  .graph-edges { list-style:none; margin-top:10px; border-top:1px dashed var(--border);
+                 padding-top:8px; font-size:.72rem; color:var(--muted); display:grid; gap:3px; }
+  .graph-edges b { color:var(--text); }
+  .graph-edges em { color:var(--blue); font-style:normal; }
 </style>
 </head>
 <body>
@@ -257,6 +279,10 @@ FALLBACK_HTML = """<!doctype html>
   <ul class="checks" id="checks"></ul>
   <div class="error" id="err" style="display:none"></div>
   <section class="card" id="card" style="display:none"></section>
+  <section class="relations" id="relations" style="display:none">
+    <button class="relations-toggle" id="relationsToggle">▾ Relations</button>
+    <div class="relations-body" id="relationsBody"></div>
+  </section>
 </main>
 <script>
 const CHECKS = [
@@ -647,10 +673,14 @@ function handle(ev) {
     state[ev.display_name] = ev.type === 'check_start' ? 'running' : 'done';
     renderChecks();
   } else if (ev.type === 'result') {
-    if (ev.mode === 'heatmap') { renderHeatmap(ev); return; }
+    if (ev.mode === 'heatmap') { renderHeatmap(ev); loadRelations(ev.file); return; }
     if (ev.mode === 'diff') { renderDiff(ev); return; }
     if (ev.mode === 'repo') { renderRepo(ev); return; }
     const r = ev;
+    if (r.evidence) {
+      const f = tEl.value.trim().split(':')[0];
+      if (f) loadRelations(f);
+    }
     const rows = CHECKS.map(c => {
       const raw = r.evidence && r.evidence[c.key];
       return `<div class="finding"><dt>${c.label}:</dt><dd>${esc(r[c.key] || '—')}</dd>` +
@@ -670,6 +700,60 @@ function handle(ev) {
     errEl.textContent = ev.message;
     errEl.style.display = '';
   }
+}
+
+// ── relations (blast-radius graph) ───────────────────────────────
+
+const relationsEl = document.getElementById('relations');
+const relationsBodyEl = document.getElementById('relationsBody');
+let relationsFile = '';
+
+document.getElementById('relationsToggle').onclick = () => {
+  const body = relationsBodyEl;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  document.getElementById('relationsToggle').textContent = open ? '▸ Relations' : '▾ Relations';
+};
+
+function loadRelations(file) {
+  if (!file) { relationsEl.style.display = 'none'; return; }
+  relationsFile = file;
+  relationsEl.style.display = '';
+  relationsBodyEl.innerHTML = '<p class="browser-status">Building graph…</p>';
+  fetch('/graph?file=' + encodeURIComponent(file))
+    .then(r => r.json().then(d => ({ ok: r.ok, d })))
+    .then(({ ok, d }) => {
+      if (!ok) throw new Error(d.detail || 'HTTP error');
+      renderRelations(d);
+    })
+    .catch(e => {
+      relationsBodyEl.innerHTML = '<p class="browser-status browser-error">' + esc(e.message) + '</p>';
+    });
+}
+
+function renderRelations(g) {
+  const col = v => v === 'Risky' ? 'g-risky' : v === 'Safe' ? 'g-safe' : 'g-review';
+  const deps = g.nodes.filter(n => n.role === 'dependency');
+  const depsOf = g.nodes.filter(n => n.role === 'dependent');
+  const center = g.nodes.find(n => n.role === 'center');
+  const short = f => { const i = f.lastIndexOf('/'); return i === -1 ? f : f.slice(i + 1); };
+  const node = (n, extra) =>
+    `<button class="graph-node ${col(n.verdict)} ${extra || ''}" ` +
+    `title="${esc(n.file)} (${esc(n.verdict)})" onclick="pickFile('${esc(n.file).replace(/'/g, '')}:1'); clearOutput(); loadRelations('${esc(n.file).replace(/'/g, '')}'); switchMode('investigate')">` +
+    `${esc(short(n.file))}</button>`;
+  relationsBodyEl.innerHTML =
+    `<div class="graph-cols">` +
+    `<div class="graph-col"><h4>Depends on</h4>` +
+    (deps.length ? deps.map(n => node(n)).join('') : '<p class="graph-none">nothing</p>') + `</div>` +
+    `<div class="graph-col"><h4>This file</h4>` +
+    (center ? node(center, 'center') : '') + `</div>` +
+    `<div class="graph-col"><h4>Blast radius</h4>` +
+    (depsOf.length ? depsOf.map(n => node(n)).join('') : '<p class="graph-none">nothing — self-contained</p>') + `</div>` +
+    `</div>` +
+    (g.edges.length ? `<ul class="graph-edges">` + g.edges.map(e =>
+      `<li><b>${esc(short(e.from))}</b> → <b>${esc(short(e.to))}</b>` +
+      (e.labels && e.labels.length ? `<em> via ${esc(e.labels.join(', '))}</em>` : '') + `</li>`
+    ).join('') + `</ul>` : '');
 }
 
 function renderHeatmap(h) {

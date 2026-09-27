@@ -87,6 +87,26 @@ type RepoHeatmapResult = {
   summary: string
 }
 
+type GraphNode = {
+  file: string
+  role: 'center' | 'dependency' | 'dependent'
+  verdict: string
+  confidence: string
+}
+
+type GraphEdge = {
+  from: string
+  to: string
+  labels: string[]
+  kind: 'depends_on' | 'depended_on_by'
+}
+
+type GraphData = {
+  center: string
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
 type RepoStatus = {
   connected: boolean
   name?: string
@@ -226,6 +246,98 @@ type FileBrowserProps = {
   onSelect: (file: string) => void
   mode: 'investigate' | 'heatmap' | 'diff'
   refreshKey: number
+}
+
+// ---------------------------------------------------------------------------
+// Relations — blast-radius dependency graph for the investigated file
+// ---------------------------------------------------------------------------
+
+function Relations({ file, onPick }: { file: string; onPick: (file: string) => void }) {
+  const [graph, setGraph] = useState<GraphData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [open, setOpen] = useState(true)
+
+  useEffect(() => {
+    if (!file) {
+      setGraph(null)
+      return
+    }
+    setLoading(true)
+    setError(null)
+    fetch(`${API_BASE}/graph?file=${encodeURIComponent(file)}`)
+      .then((r) => (r.ok ? r.json() : r.json().then((d) => {
+        throw new Error(d.detail || `Error ${r.status}`)
+      })))
+      .then((d: GraphData) => {
+        setGraph(d)
+        setLoading(false)
+      })
+      .catch((e: Error) => {
+        setError(e.message)
+        setGraph(null)
+        setLoading(false)
+      })
+  }, [file])
+
+  const deps = graph?.nodes.filter((n) => n.role === 'dependency') ?? []
+  const depsOf = graph?.nodes.filter((n) => n.role === 'dependent') ?? []
+  const center = graph?.nodes.find((n) => n.role === 'center')
+  const colOf = (verdict: string) => VERDICT_CLASS[verdict] ?? 'verdict-review'
+
+  return (
+    <section className="relations">
+      <button className="relations-toggle" onClick={() => setOpen((v) => !v)}>
+        {open ? '▾' : '▸'} Relations — what connects to {file.split('/').pop()}
+      </button>
+      {open && (
+        <div className="relations-body">
+          {loading && <p className="browser-status">Building graph…</p>}
+          {error && <p className="browser-status browser-error">{error}</p>}
+          {!loading && !error && graph && (
+            <div className="graph-cols">
+              <div className="graph-col">
+                <h4>Depends on</h4>
+                {deps.length === 0 && <p className="graph-none">nothing</p>}
+                {deps.map((n) => (
+                  <button key={n.file} className={`graph-node ${colOf(n.verdict)}`} onClick={() => onPick(n.file)} title={`${n.file} (${n.verdict})`}>
+                    {n.file.split('/').pop()}
+                  </button>
+                ))}
+              </div>
+              <div className="graph-col graph-center-col">
+                <h4>This file</h4>
+                {center && (
+                  <button className={`graph-node center ${colOf(center.verdict)}`} title={`${center.file} (${center.verdict})`}>
+                    {center.file.split('/').pop()}
+                  </button>
+                )}
+              </div>
+              <div className="graph-col">
+                <h4>Blast radius</h4>
+                {depsOf.length === 0 && <p className="graph-none">nothing — self-contained</p>}
+                {depsOf.map((n) => (
+                  <button key={n.file} className={`graph-node ${colOf(n.verdict)}`} onClick={() => onPick(n.file)} title={`${n.file} (${n.verdict})`}>
+                    {n.file.split('/').pop()}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {!loading && !error && graph && graph.edges.length > 0 && (
+            <ul className="graph-edges">
+              {graph.edges.map((e, i) => (
+                <li key={i}>
+                  <b>{e.from.split('/').pop()}</b> → <b>{e.to.split('/').pop()}</b>
+                  {e.labels.length > 0 && <em> via {e.labels.join(', ')}</em>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  )
 }
 
 function FileBrowser({ onSelect, mode, refreshKey }: FileBrowserProps) {
@@ -556,6 +668,8 @@ export default function Home() {
   const [repoRefreshKey, setRepoRefreshKey] = useState(0)
   // The connection gate: tools appear only once a repo is connected
   const [repoConnected, setRepoConnected] = useState(false)
+  // Track the last investigated file for the Relations panel
+  const [graphFile, setGraphFile] = useState('')
 
   useEffect(() => {
     fetch(`${API_BASE}/repo/status`)
@@ -643,6 +757,8 @@ export default function Home() {
         setRepoResult(event as unknown as RepoHeatmapResult)
       } else {
         setResult(event as unknown as Result)
+        const t = (event as { evidence?: Evidence }).evidence ? target.trim() : ''
+        if (t && t.includes('.ts')) setGraphFile(t.split(':')[0])
       }
     } else if (event.type === 'error') {
       setError(event.message as string)
@@ -782,6 +898,17 @@ export default function Home() {
           )}
 
           {error && <div className="error">{error}</div>}
+
+          {graphFile && (
+            <Relations
+              file={graphFile}
+              onPick={(f) => {
+                setMode('investigate')
+                setTarget(`${f}:1`)
+                clearOutput()
+              }}
+            />
+          )}
 
           {result && (
             <section className={`card ${VERDICT_CLASS[result.verdict] ?? 'verdict-review'}`}>
