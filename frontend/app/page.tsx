@@ -264,13 +264,22 @@ function FileBrowser({ onSelect, mode, refreshKey }: FileBrowserProps) {
           )}
           <ul className="browser-list">
             {filtered.map((f) => (
-              <li key={f}>
+              <li key={f} className="browser-item">
                 <button
                   className="browser-file"
                   onClick={() => pick(mode === 'investigate' ? `${f}:1` : f)}
                   title={f}
                 >
-                  {f}
+                  {f.includes('/') ? '📄 ' : ''}{f.split('/').pop()}
+                  <em className="browser-path">{f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : ''}</em>
+                </button>
+                <button
+                  className="browser-select"
+                  onClick={() => pick(mode === 'investigate' ? `${f}:1` : f)}
+                  title={`Select ${f}`}
+                  aria-label={`Select ${f}`}
+                >
+                  Select
                 </button>
               </li>
             ))}
