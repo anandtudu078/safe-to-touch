@@ -820,6 +820,79 @@ main:has(.repo-connected) {
   color: #0d1117;
 }
 
+.editor-commit {
+  background: var(--blue);
+  color: #0d1117;
+}
+
+.wide-action {
+  flex: 1;
+  max-width: 640px;
+  justify-content: center;
+}
+
+/* Repo treemap */
+.treemap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 12px 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.tree-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 90px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tree-cell.tree-file,
+.tree-cell .tree-file {
+  font-size: 0.75rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.tree-cell .tree-counts {
+  font-size: 0.68rem;
+  opacity: 0.85;
+}
+
+.tree-cell.verdict-risky {
+  background: rgba(248, 81, 73, 0.18);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.tree-cell.verdict-review {
+  background: rgba(210, 153, 34, 0.15);
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.tree-cell.verdict-safe {
+  background: rgba(63, 185, 80, 0.15);
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.heat-row {
+  cursor: pointer;
+}
+
 .editor-save:disabled {
   opacity: 0.4;
   cursor: not-allowed;

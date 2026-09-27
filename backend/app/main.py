@@ -75,6 +75,16 @@ class FileContentPatchRequest(BaseModel):
     content: str = Field(description="Full new file content")
 
 
+class FileCommitRequest(BaseModel):
+    file: str = Field(min_length=1, description="Repo-relative file path")
+    content: str = Field(description="Full new file content")
+    message: str = Field(
+        min_length=1, max_length=200, description="Commit message",
+    )
+    name: str | None = Field(default=None, max_length=100, description="Commit author name")
+    email: str | None = Field(default=None, max_length=100, description="Commit author email")
+
+
 # ---------------------------------------------------------------------------
 # Runtime repo state — overridden by POST /repo/connect without restart
 # ---------------------------------------------------------------------------
@@ -285,6 +295,47 @@ async def patch_file_content(req: FileContentPatchRequest) -> dict:
     return {"file": req.file, "saved": True, "line_count": len(lines)}
 
 
+@app.post("/file-commit")
+async def file_commit(req: FileCommitRequest) -> dict:
+    """Save the file, then commit just that file in the target repo."""
+    repo = _target_repo()
+    if not repo.is_dir():
+        raise HTTPException(status_code=404, detail="No target repo found")
+    target = repo / req.file
+    try:
+        target.resolve().relative_to(repo.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {req.file}")
+
+    def _commit() -> dict:
+        target.write_text(req.content, encoding="utf-8")
+        git = lambda *a: subprocess.run(  # noqa: E731
+            ["git", "-C", str(repo), *a], capture_output=True, text=True, timeout=30, check=True,
+        )
+        git("add", "--", req.file)
+        author = []
+        if req.name:
+            author += ["-c", f"user.name={req.name}"]
+        if req.email:
+            author += ["-c", f"user.email={req.email}"]
+        res = git(*author, "commit", "-m", req.message, "--", req.file)
+        sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        return {"file": req.file, "committed": True, "commit": sha,
+                "message": req.message, "output": res.stdout.strip()[-200:]}
+
+    try:
+        return await asyncio.to_thread(_commit)
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=400, detail=exc.stderr.strip() or "git commit failed") from exc
+    except Exception as exc:  # noqa: BLE001 - surfaced to the UI on purpose
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.get("/files")
 async def list_files() -> dict:
     """Return all source files tracked in the target repo, grouped by directory."""
@@ -412,6 +463,142 @@ async def heatmap(req: HeatmapRequest) -> StreamingResponse:
             yield _sse({"type": "error", "message": str(e)})
         except TimeoutError:
             yield _sse({"type": "error", "message": f"Heatmap timed out after {GEMINI_TIMEOUT_SECONDS:.0f}s"})
+        except Exception as e:  # noqa: BLE001 - surfaced to the UI on purpose
+            yield _sse({"type": "error", "message": gemini_client.friendly_error(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/diff-investigate")
+async def diff_investigate() -> StreamingResponse:
+    """Investigate the functions touched by uncommitted working-tree changes."""
+
+    async def stream() -> AsyncIterator[str]:
+        try:
+            regions = await asyncio.to_thread(checks.changed_regions)
+            if not regions:
+                yield _sse(
+                    {
+                        "type": "result",
+                        "mode": "diff",
+                        "summary": "No uncommitted changes found. Edit a file (\u270f\ufe0f Edit files) and try again.",
+                        "functions": [],
+                        "changed_files": [],
+                    }
+                )
+                return
+
+            for _, display in CANONICAL_CHECKS:
+                yield _sse({"type": "check_start", "agent_id": display, "display_name": display})
+
+            def collect_all() -> list[dict]:
+                items: list[dict] = []
+                for r in regions:
+                    try:
+                        reports = checks.collect(f"{r['file']}:{r['line']}")
+                    except checks.CheckError as e:
+                        reports = CheckReports(
+                            history=f"INCONCLUSIVE: yes\nNOTES: {e}",
+                            docs="INCONCLUSIVE: yes",
+                            dependents="INCONCLUSIVE: yes",
+                            tests="INCONCLUSIVE: yes",
+                            inconclusive=["history", "docs", "dependents", "tests"],
+                        )
+                    items.append({"name": r["name"], "file": r["file"], "line": r["line"], "reports": reports})
+                return items
+
+            items = await asyncio.to_thread(collect_all)
+            files = sorted({r["file"] for r in regions})
+            merged = await asyncio.wait_for(
+                asyncio.to_thread(gemini_client.merge_diff, items, files),
+                timeout=GEMINI_TIMEOUT_SECONDS,
+            )
+            for _, display in CANONICAL_CHECKS:
+                yield _sse({"type": "check_finish", "agent_id": display, "display_name": display})
+            yield _sse({"type": "result", **merged.model_dump()})
+        except checks.CheckError as e:
+            yield _sse({"type": "error", "message": str(e)})
+        except TimeoutError:
+            yield _sse({"type": "error", "message": f"Diff review timed out after {GEMINI_TIMEOUT_SECONDS:.0f}s"})
+        except Exception as e:  # noqa: BLE001 - surfaced to the UI on purpose
+            yield _sse({"type": "error", "message": gemini_client.friendly_error(e)})
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/repo-heatmap")
+async def repo_heatmap() -> StreamingResponse:
+    """Repo-wide risk: aggregate per-file verdicts across all code files."""
+
+    async def stream() -> AsyncIterator[str]:
+        try:
+            for _, display in CANONICAL_CHECKS:
+                yield _sse({"type": "check_start", "agent_id": display, "display_name": display})
+
+            def scan() -> dict[str, dict]:
+                repo = checks._repo()
+                out = subprocess.run(
+                    ["git", "-C", str(repo), "ls-files"],
+                    capture_output=True, text=True, timeout=20, check=True,
+                ).stdout
+                code_files = [
+                    f for f in out.splitlines() if f
+                    and not f.lower().endswith(checks.NON_CODE_SUFFIXES)
+                    and not any(h in f for h in checks.TEST_HINTS)
+                    and not f.startswith((".", "frontend/out"))
+                ][:40]
+                agg: dict[str, dict] = {}
+                for path in code_files:
+                    counts = {"functions": 0, "risky": 0, "review": 0, "safe": 0}
+                    for f in checks.list_functions(path):
+                        try:
+                            reports = checks.collect(f"{path}:{f['line']}")
+                        except checks.CheckError:
+                            continue
+                        verdict = gemini_client.rule_verdict(reports)
+                        counts["functions"] += 1
+                        if verdict == "Risky":
+                            counts["risky"] += 1
+                        elif verdict == "Safe":
+                            counts["safe"] += 1
+                        else:
+                            counts["review"] += 1
+                    if counts["functions"] == 0:
+                        continue
+                    score = counts["risky"] * 2 + counts["review"]
+                    if counts["risky"]:
+                        verdict = "Risky"
+                    elif counts["review"]:
+                        verdict = "Needs Review"
+                    else:
+                        verdict = "Safe"
+                    agg[path] = {**counts, "verdict": verdict, "score": score}
+                return agg
+
+            agg = await asyncio.to_thread(scan)
+            if not agg:
+                yield _sse({"type": "result", "mode": "repo", "files": [],
+                            "summary": "No scannable functions found in this repo."})
+                return
+            merged = await asyncio.wait_for(
+                asyncio.to_thread(gemini_client.rank_repo, agg),
+                timeout=GEMINI_TIMEOUT_SECONDS,
+            )
+            for _, display in CANONICAL_CHECKS:
+                yield _sse({"type": "check_finish", "agent_id": display, "display_name": display})
+            yield _sse({"type": "result", **merged.model_dump()})
+        except checks.CheckError as e:
+            yield _sse({"type": "error", "message": str(e)})
+        except TimeoutError:
+            yield _sse({"type": "error", "message": f"Repo scan timed out after {GEMINI_TIMEOUT_SECONDS:.0f}s"})
         except Exception as e:  # noqa: BLE001 - surfaced to the UI on purpose
             yield _sse({"type": "error", "message": gemini_client.friendly_error(e)})
 

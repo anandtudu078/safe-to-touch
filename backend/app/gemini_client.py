@@ -6,11 +6,20 @@ same deterministic rules the Codebuff version used), and heatmap ranking.
 """
 
 import os
+import re
 from typing import Any
 
 from pydantic import ValidationError
 
-from .schemas import CheckReports, HeatmapResult, VerdictResult
+from .schemas import (
+    CheckReports,
+    DiffFunction,
+    DiffResult,
+    HeatmapResult,
+    RepoFileRisk,
+    RepoHeatmapResult,
+    VerdictResult,
+)
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 # Used when the primary model hammers into 503/429 on the shared free tier.
@@ -179,6 +188,149 @@ HEATMAP_SCHEMA = {
 }
 
 _ORDER = {"Risky": 0, "Needs Review": 1, "Safe": 2}
+
+
+def _verdict_fields() -> dict:
+    return {
+        "name": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["Safe", "Risky", "Needs Review"]},
+        "confidence": {"type": "string", "enum": ["High", "Medium", "Low"]},
+        "reason": {"type": "string"},
+    }
+
+
+def merge_diff(items: list[dict], files: list[str]) -> "DiffResult":
+    """Verdicts for the changed functions in the working tree.
+
+    items: [{name, file, line, reports: CheckReports}, ...]
+    """
+    blocks = []
+    for it in items:
+        r = it["reports"]
+        blocks.append(f"FUNCTION: {it['name']} ({it['file']}:{it['line']})\nHISTORY:\n{r.history}\nDOCS:\n{r.docs}\n"
+                      f"DEPENDENTS:\n{r.dependents}\nTESTS:\n{r.tests}")
+    prompt = (
+        "You are the merger of a 'should I touch this' diff review. These are the "
+        "functions changed by UNCOMMITTED working-tree edits.\n"
+        f"{_VERDICT_RULES}\n\n"
+        "For EACH function: give verdict, confidence, and a one-sentence reason "
+        "citing its strongest evidence. Rank hottest first: Risky before "
+        "Needs Review before Safe.\n\n"
+        + "\n\n".join(blocks)
+    )
+    schema = {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "functions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {**_verdict_fields(), "file": {"type": "string"},
+                                   "line": {"type": "integer"}},
+                    "required": ["name", "verdict", "confidence", "reason"],
+                },
+            },
+        },
+        "required": ["summary", "functions"],
+    }
+    client, _ = _client_and_model()
+    data = _generate_structured(client, prompt, schema)
+    by_name = {it["name"]: it for it in items}
+    out: list[DiffFunction] = []
+    for f in data.get("functions", []):
+        name = f.get("name", "")
+        it = by_name.get(name)
+        if not it:
+            continue
+        out.append(DiffFunction(
+            name=it["name"], file=it["file"], line=it["line"],
+            verdict=f.get("verdict", "Needs Review"),
+            confidence=f.get("confidence", "Low"),
+            reason=f.get("reason", ""),
+        ))
+    # Deterministic order + include anything the LLM skipped as Needs Review.
+    for it in items:
+        if all(o.name != it["name"] for o in out):
+            out.append(DiffFunction(
+                name=it["name"], file=it["file"], line=it["line"],
+                verdict="Needs Review", confidence="Low",
+                reason="The merger skipped this function; review the evidence manually.",
+            ))
+    out.sort(key=lambda d: (_ORDER.get(d.verdict, 1), d.file, d.line))
+    return DiffResult(summary=data.get("summary", ""), functions=out, changed_files=files)
+
+
+def rank_repo(files: dict[str, dict]) -> "RepoHeatmapResult":
+    """Repo-wide risk: the LLM summarizes; scores stay deterministic."""
+    lines = []
+    for path, agg in files.items():
+        lines.append(
+            f"{path}: {agg['risky']} risky, {agg['review']} review, {agg['safe']} safe "
+            f"of {agg['functions']} functions"
+        )
+    prompt = (
+        "You are summarizing a repo-wide risk scan for a 'should I touch this' tool. "
+        "In 2-3 sentences name the hottest files and what the pattern suggests. "
+        "Do not invent files that are not listed.\n\n" + "\n".join(lines)
+    )
+    schema = {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+    }
+    client, _ = _client_and_model()
+    data = _generate_structured(client, prompt, schema)
+    out = [
+        RepoFileRisk(
+            file=path, functions=a["functions"], risky=a["risky"],
+            review=a["review"], safe=a["safe"], verdict=a["verdict"], score=a["score"],
+        )
+        for path, a in files.items()
+    ]
+    out.sort(key=lambda f: (-f.score, f.file))
+    return RepoHeatmapResult(summary=data.get("summary", ""), files=out)
+
+
+def rule_verdict(reports: CheckReports) -> str:
+    """Apply _VERDICT_RULES deterministically in code (no LLM).
+
+    Mirrors the priority the LLM is told to follow: Risky rules first, then
+    Safe, else Needs Review. Used for repo-wide aggregation.
+    """
+    def field(text: str, key: str) -> str:
+        for line in text.splitlines():
+            if line.startswith(key):
+                return line[len(key):].strip()
+        return ""
+
+    churn = field(reports.history, "CHURN:")
+    suspicious = field(reports.history, "SUSPICIOUS:").lower() == "yes"
+    docs_status = field(reports.docs, "STATUS:")
+    covered = field(reports.tests, "COVERED:").lower()
+    dependents = field(reports.dependents, "DEPENDENT_COUNT:")
+    try:
+        dependent_count = int(re.search(r"\d+", dependents).group()) if dependents else 0
+    except AttributeError:
+        dependent_count = 0
+    self_contained = field(reports.dependents, "SELF_CONTAINED:").lower() == "yes"
+    inconclusive_count = len(reports.inconclusive)
+
+    # RISKY if any of:
+    if covered == "no" and dependent_count > 0:
+        return "Risky"
+    if "HOT" in churn or suspicious:
+        return "Risky"
+    if docs_status == "WARNED":
+        return "Risky"
+    # SAFE if any of:
+    if docs_status == "DOCUMENTED_CURRENT" and covered in ("yes", "indirectly"):
+        return "Safe"
+    if self_contained and covered != "no" and docs_status != "WARNED":
+        return "Safe"
+    if churn.startswith("SINGLE_INTRO") and self_contained:
+        return "Safe"
+    return "Needs Review"
 
 
 def merge_verdict(reports: CheckReports) -> VerdictResult:

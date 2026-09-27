@@ -55,6 +55,38 @@ type HeatmapResult = {
   summary: string
 }
 
+type DiffFunction = {
+  name: string
+  file: string
+  line: number
+  verdict: string
+  confidence: string
+  reason: string
+}
+
+type DiffResult = {
+  mode: 'diff'
+  summary: string
+  functions: DiffFunction[]
+  changed_files: string[]
+}
+
+type RepoFileRisk = {
+  file: string
+  functions: number
+  risky: number
+  review: number
+  safe: number
+  verdict: string
+  score: number
+}
+
+type RepoHeatmapResult = {
+  mode: 'repo'
+  files: RepoFileRisk[]
+  summary: string
+}
+
 type RepoStatus = {
   connected: boolean
   name?: string
@@ -192,7 +224,7 @@ function RepoConnector({ onConnected }: RepoConnectorProps) {
 
 type FileBrowserProps = {
   onSelect: (file: string) => void
-  mode: 'investigate' | 'heatmap'
+  mode: 'investigate' | 'heatmap' | 'diff'
   refreshKey: number
 }
 
@@ -308,6 +340,7 @@ function FileEditor({ refreshKey }: FileEditorProps) {
   const [loadingFiles, setLoadingFiles] = useState(false)
   const [loadingContent, setLoadingContent] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [committing, setCommitting] = useState(false)
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [editorError, setEditorError] = useState<string | null>(null)
   const [filterQuery, setFilterQuery] = useState('')
@@ -375,6 +408,31 @@ function FileEditor({ refreshKey }: FileEditorProps) {
     setContent(originalContent)
     setSaveMsg(null)
     setEditorError(null)
+  }
+
+  async function commitFile() {
+    if (!selectedFile || committing || content === originalContent) return
+    const message = window.prompt(`Commit message for ${selectedFile}:`, `update ${selectedFile}`)
+    if (!message) return
+    setCommitting(true)
+    setEditorError(null)
+    setSaveMsg(null)
+    try {
+      const res = await fetch(`${API_BASE}/file-commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: selectedFile, content, message }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
+      setOriginalContent(content)
+      setLineCount(content.split('\n').length)
+      setSaveMsg(`Committed as ${data.commit} — "${message}"`)
+    } catch (e) {
+      setEditorError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCommitting(false)
+    }
   }
 
   const isDirty = content !== originalContent
@@ -449,6 +507,14 @@ function FileEditor({ refreshKey }: FileEditorProps) {
                     >
                       {saving ? 'Saving…' : 'Save'}
                     </button>
+                    <button
+                      className="editor-btn editor-commit"
+                      onClick={commitFile}
+                      disabled={isDirty || committing}
+                      title={isDirty ? 'Save first, then commit' : 'Commit this file'}
+                    >
+                      {committing ? 'Committing…' : '✔ Commit'}
+                    </button>
                   </div>
                 </div>
                 {saveMsg && <p className="editor-save-msg">{saveMsg}</p>}
@@ -476,12 +542,14 @@ function FileEditor({ refreshKey }: FileEditorProps) {
 // ---------------------------------------------------------------------------
 
 export default function Home() {
-  const [mode, setMode] = useState<'investigate' | 'heatmap'>('investigate')
+  const [mode, setMode] = useState<'investigate' | 'heatmap' | 'diff' | 'repo'>('investigate')
   const [target, setTarget] = useState('')
   const [investigating, setInvestigating] = useState(false)
   const [checks, setChecks] = useState<CheckState[]>(INITIAL_CHECKS)
   const [result, setResult] = useState<Result | null>(null)
   const [heatmap, setHeatmap] = useState<HeatmapResult | null>(null)
+  const [diffResult, setDiffResult] = useState<DiffResult | null>(null)
+  const [repoResult, setRepoResult] = useState<RepoHeatmapResult | null>(null)
   const [openEvidence, setOpenEvidence] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Bumped whenever a new repo is connected — forces FileBrowser + FileEditor to reload
@@ -498,22 +566,31 @@ export default function Home() {
 
   async function run() {
     const subject = target.trim()
-    if (!subject || investigating) return
+    if (investigating) return
+    if (mode !== 'diff' && mode !== 'repo' && !subject) return
     setInvestigating(true)
     setResult(null)
     setHeatmap(null)
+    setDiffResult(null)
+    setRepoResult(null)
     setOpenEvidence(null)
     setError(null)
     setChecks(INITIAL_CHECKS.map((c) => ({ ...c, status: 'pending' })))
 
     try {
-      const endpoint = mode === 'investigate' ? '/investigate' : '/heatmap'
+      const endpoint =
+        mode === 'investigate' ? '/investigate'
+        : mode === 'heatmap' ? '/heatmap'
+        : mode === 'diff' ? '/diff-investigate'
+        : '/repo-heatmap'
       const body =
-        mode === 'investigate' ? { target: subject } : { file: subject }
+        mode === 'investigate' ? { target: subject }
+        : mode === 'heatmap' ? { file: subject }
+        : null
       const res = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: body ? JSON.stringify(body) : undefined,
       })
 
       if (!res.ok || !res.body) {
@@ -557,8 +634,13 @@ export default function Home() {
         ),
       )
     } else if (event.type === 'result') {
-      if ((event as unknown as HeatmapResult).mode === 'heatmap') {
+      const m = (event as { mode?: string }).mode
+      if (m === 'heatmap') {
         setHeatmap(event as unknown as HeatmapResult)
+      } else if (m === 'diff') {
+        setDiffResult(event as unknown as DiffResult)
+      } else if (m === 'repo') {
+        setRepoResult(event as unknown as RepoHeatmapResult)
       } else {
         setResult(event as unknown as Result)
       }
@@ -570,6 +652,8 @@ export default function Home() {
   function clearOutput() {
     setResult(null)
     setHeatmap(null)
+    setDiffResult(null)
+    setRepoResult(null)
     setOpenEvidence(null)
     setError(null)
     setChecks(INITIAL_CHECKS.map((c) => ({ ...c, status: 'pending' })))
@@ -620,9 +704,25 @@ export default function Home() {
             >
               Whole file
             </button>
+            <button
+              role="tab"
+              aria-selected={mode === 'diff'}
+              className={mode === 'diff' ? 'tab active' : 'tab'}
+              onClick={() => setMode('diff')}
+            >
+              My changes
+            </button>
+            <button
+              role="tab"
+              aria-selected={mode === 'repo'}
+              className={mode === 'repo' ? 'tab active' : 'tab'}
+              onClick={() => setMode('repo')}
+            >
+              Whole repo
+            </button>
           </div>
 
-          <div className="input-row">
+          <div className="input-row" style={mode === 'diff' || mode === 'repo' ? { display: 'none' } : undefined}>
             <input
               value={target}
               onChange={(e) => setTarget(e.target.value)}
@@ -639,14 +739,28 @@ export default function Home() {
             </button>
           </div>
 
-          <FileBrowser
-            mode={mode}
-            refreshKey={repoRefreshKey}
-            onSelect={(file) => {
-              setTarget(file)
-              clearOutput()
-            }}
-          />
+          {(mode === 'diff' || mode === 'repo') && (
+            <div className="input-row">
+              <button onClick={run} disabled={investigating} className="wide-action">
+                {investigating
+                  ? 'Scanning…'
+                  : mode === 'diff'
+                    ? '🔍 Review my uncommitted changes'
+                    : '🗺️ Scan whole repo risk'}
+              </button>
+            </div>
+          )}
+
+          {mode !== 'repo' && (
+            <FileBrowser
+              mode={mode}
+              refreshKey={repoRefreshKey}
+              onSelect={(file) => {
+                setTarget(file)
+                clearOutput()
+              }}
+            />
+          )}
 
           {/* ── Step 2: file editor ──────────────────────────────────── */}
           <FileEditor refreshKey={repoRefreshKey} />
@@ -739,6 +853,107 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
+              )}
+            </section>
+          )}
+
+          {diffResult && (
+            <section className="card heatmap">
+              <div className="card-head">
+                <span className="verdict heatmap-title">My changes</span>
+                <span className="confidence">
+                  {diffResult.changed_files.length} file(s) changed
+                </span>
+              </div>
+              <p className="summary">{diffResult.summary}</p>
+              {diffResult.functions.length === 0 ? (
+                <p className="empty">{diffResult.summary}</p>
+              ) : (
+                <ul className="heat-list">
+                  {diffResult.functions.map((f, i) => (
+                    <li
+                      key={`${f.name}-${i}`}
+                      className={`heat-row ${VERDICT_CLASS[f.verdict] ?? 'verdict-review'}`}
+                      onClick={() => {
+                        setMode('investigate')
+                        setTarget(`${f.file}:${f.line}`)
+                        clearOutput()
+                      }}
+                    >
+                      <span className={`heat-badge ${VERDICT_CLASS[f.verdict] ?? 'verdict-review'}`}>
+                        {f.verdict}
+                      </span>
+                      <span className="heat-name">
+                        {f.name}
+                        <em>:{f.line}</em>
+                      </span>
+                      <span className="heat-conf">{f.confidence}</span>
+                      <span className="heat-reason">{f.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
+          {repoResult && (
+            <section className="card heatmap">
+              <div className="card-head">
+                <span className="verdict heatmap-title">Repo risk treemap</span>
+                <span className="confidence">{repoResult.files.length} files</span>
+              </div>
+              <p className="summary">{repoResult.summary}</p>
+              {repoResult.files.length === 0 ? (
+                <p className="empty">{repoResult.summary}</p>
+              ) : (
+                <>
+                  <div className="treemap">
+                    {repoResult.files.map((f) => {
+                      const cls = VERDICT_CLASS[f.verdict] ?? 'verdict-review'
+                      const flex = Math.max(f.score * 2 + 1, 1)
+                      return (
+                        <button
+                          key={f.file}
+                          className={`tree-cell ${cls}`}
+                          style={{ flexGrow: flex }}
+                          title={`${f.file} — ${f.risky} risky, ${f.review} review, ${f.safe} safe of ${f.functions} functions`}
+                          onClick={() => {
+                            setMode('heatmap')
+                            setTarget(f.file)
+                            clearOutput()
+                          }}
+                        >
+                          <span className="tree-file">{f.file.split('/').pop()}</span>
+                          <span className="tree-counts">
+                            {f.risky}R · {f.review}? · {f.safe}S
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <ul className="heat-list">
+                    {repoResult.files.map((f) => (
+                      <li
+                        key={f.file}
+                        className={`heat-row ${VERDICT_CLASS[f.verdict] ?? 'verdict-review'}`}
+                        onClick={() => {
+                          setMode('heatmap')
+                          setTarget(f.file)
+                          clearOutput()
+                        }}
+                      >
+                        <span className={`heat-badge ${VERDICT_CLASS[f.verdict] ?? 'verdict-review'}`}>
+                          {f.verdict}
+                        </span>
+                        <span className="heat-name">{f.file}</span>
+                        <span className="heat-conf">{f.functions} fn</span>
+                        <span className="heat-reason">
+                          {f.risky} risky · {f.review} review · {f.safe} safe
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )}
             </section>
           )}
