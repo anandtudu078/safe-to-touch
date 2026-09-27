@@ -64,3 +64,43 @@ class CheckReports(BaseModel):
     dependents: str
     tests: str
     inconclusive: list[str] = Field(default_factory=list)
+
+
+class DiffFunction(BaseModel):
+    """One changed function in the working tree, with its verdict."""
+
+    name: str
+    file: str
+    line: int
+    verdict: Verdict
+    confidence: Confidence
+    reason: str
+
+
+class DiffResult(BaseModel):
+    """Verdicts for the uncommitted diff (diff mode)."""
+
+    mode: Literal["diff"] = "diff"
+    summary: str
+    functions: list[DiffFunction]
+    changed_files: list[str] = Field(default_factory=list)
+
+
+class RepoFileRisk(BaseModel):
+    """Aggregated risk for one file in the repo-wide treemap."""
+
+    file: str
+    functions: int
+    risky: int
+    review: int
+    safe: int
+    verdict: Verdict
+    score: float
+
+
+class RepoHeatmapResult(BaseModel):
+    """Repo-wide risk overview (treemap)."""
+
+    mode: Literal["repo"] = "repo"
+    files: list[RepoFileRisk]
+    summary: str

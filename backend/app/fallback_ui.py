@@ -133,6 +133,44 @@ FALLBACK_HTML = """<!doctype html>
           color:var(--muted); text-align:left; }
   .sugg b { text-transform:uppercase; letter-spacing:.05em; font-size:.7rem; display:block; margin-bottom:4px; }
   .sugg li { margin-left:16px; }
+
+  /* ── wide action (diff / repo modes) ─────────────────────────── */
+  .wide-action { flex:1; max-width:640px; }
+
+  /* ── repo treemap ───────────────────────────────────────────── */
+  .treemap { display:flex; flex-wrap:wrap; gap:4px; margin:12px 0; padding:8px;
+             border:1px solid var(--border); border-radius:6px; background:var(--bg); }
+  .tree-cell { display:flex; flex-direction:column; align-items:flex-start; gap:2px;
+               min-width:90px; padding:8px 10px; border-radius:4px; border:1px solid var(--border);
+               font:inherit; cursor:pointer; text-align:left; }
+  .tree-file { font-size:.75rem; font-weight:700; max-width:100%; overflow:hidden;
+               text-overflow:ellipsis; white-space:nowrap; }
+  .tree-counts { font-size:.68rem; opacity:.85; }
+  .tree-cell.t-risky { background:rgba(248,81,73,.18); border-color:var(--red); color:var(--red); }
+  .tree-cell.t-review { background:rgba(210,153,34,.15); border-color:var(--amber); color:var(--amber); }
+  .tree-cell.t-safe { background:rgba(63,185,80,.15); border-color:var(--green); color:var(--green); }
+  .heat-row { cursor:pointer; }
+
+  /* ── editor (fallback) ──────────────────────────────────────── */
+  .editor-toggle { background:transparent; color:var(--amber); border:1px solid var(--amber);
+                   font:inherit; font-size:.8rem; padding:4px 12px; border-radius:6px;
+                   cursor:pointer; margin-top:8px; }
+  .editor-panel { width:100%; max-width:640px; margin-top:8px; background:var(--panel);
+                  border:1px solid var(--border); border-radius:6px; padding:10px; text-align:left; }
+  .editor-topbar { display:flex; align-items:center; gap:10px; margin-bottom:6px; font-size:.8rem; }
+  .editor-filename { color:var(--text); font-weight:600; flex:1; overflow:hidden;
+                     text-overflow:ellipsis; white-space:nowrap; }
+  .editor-dirty { color:var(--amber); font-size:.72rem; }
+  .editor-btn { font:inherit; font-size:.75rem; font-weight:600; padding:4px 10px;
+                border-radius:6px; border:none; cursor:pointer; background:var(--border); color:var(--text); }
+  .editor-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .editor-save { background:var(--green); color:#0d1117; }
+  .editor-commit { background:var(--blue); color:#0d1117; }
+  .editor-msg { font-size:.75rem; color:var(--green); margin:4px 0; }
+  .editor-ta { width:100%; min-height:220px; background:var(--bg); color:var(--text);
+               border:1px solid var(--border); border-radius:6px; font:inherit;
+               font-size:.78rem; padding:8px; resize:vertical; }
+  .editor-ta:focus { outline:1px solid var(--blue); }
 </style>
 </head>
 <body>
@@ -172,12 +210,19 @@ FALLBACK_HTML = """<!doctype html>
     <div class="mode-tabs">
       <button class="tab active" id="tabInvestigate" onclick="switchMode('investigate')">One line</button>
       <button class="tab" id="tabHeatmap" onclick="switchMode('heatmap')">Whole file</button>
+      <button class="tab" id="tabDiff" onclick="switchMode('diff')">My changes</button>
+      <button class="tab" id="tabRepo" onclick="switchMode('repo')">Whole repo</button>
     </div>
 
-    <!-- Target input -->
-    <div class="input-row">
+    <!-- Target input (hidden for diff / repo modes) -->
+    <div class="input-row" id="inputRow">
       <input id="t" placeholder="src/utils/date.ts:120  or  parseDateString in src/date.ts" />
       <button id="go">Investigate</button>
+    </div>
+
+    <!-- One-shot action for diff / repo modes -->
+    <div class="input-row" id="actionRow" style="display:none">
+      <button class="wide-action" id="wideGo">&#128269; Review my uncommitted changes</button>
     </div>
 
     <!-- File browser -->
@@ -187,6 +232,24 @@ FALLBACK_HTML = """<!doctype html>
         <input class="browser-search" id="browserSearch" placeholder="Filter files…" oninput="filterFiles()" />
         <p class="browser-status" id="browserStatus" style="display:none"></p>
         <ul class="browser-list" id="browserList"></ul>
+      </div>
+    </div>
+
+    <!-- File editor with commit -->
+    <div class="file-browser" id="editorWrap">
+      <button class="editor-toggle" id="editorToggle" onclick="toggleEditor()">✏️ Edit files</button>
+      <div class="editor-panel" id="editorPanel" style="display:none">
+        <div class="input-row" style="max-width:none">
+          <select class="browser-search" id="editorFile" style="flex:1" onchange="editorOpen()"></select>
+        </div>
+        <div class="editor-topbar">
+          <span class="editor-filename" id="editorName">no file loaded</span>
+          <span class="editor-dirty" id="editorDirty" style="display:none">● unsaved</span>
+          <button class="editor-btn editor-save" id="editorSaveBtn" onclick="editorSave()" disabled>Save</button>
+          <button class="editor-btn editor-commit" id="editorCommitBtn" onclick="editorCommit()" disabled>✔ Commit</button>
+        </div>
+        <p class="editor-msg" id="editorMsg" style="display:none"></p>
+        <textarea class="editor-ta" id="editorTa" spellcheck="false" style="display:none"></textarea>
       </div>
     </div>
   </div>
@@ -309,10 +372,18 @@ function switchMode(m) {
   currentMode = m;
   document.getElementById('tabInvestigate').className = 'tab' + (m === 'investigate' ? ' active' : '');
   document.getElementById('tabHeatmap').className = 'tab' + (m === 'heatmap' ? ' active' : '');
+  document.getElementById('tabDiff').className = 'tab' + (m === 'diff' ? ' active' : '');
+  document.getElementById('tabRepo').className = 'tab' + (m === 'repo' ? ' active' : '');
+  document.getElementById('inputRow').style.display = (m === 'diff' || m === 'repo') ? 'none' : '';
+  document.getElementById('actionRow').style.display = (m === 'diff' || m === 'repo') ? '' : 'none';
+  document.getElementById('fileBrowser').style.display = m === 'repo' ? 'none' : '';
   tEl.placeholder = m === 'investigate'
     ? 'src/utils/date.ts:120  or  parseDateString in src/date.ts'
     : 'src/utils/date.ts';
   goEl.textContent = m === 'investigate' ? 'Investigate' : 'Scan file';
+  document.getElementById('wideGo').textContent = m === 'diff'
+    ? '🔍 Review my uncommitted changes'
+    : '🗺️ Scan whole repo risk';
   clearOutput();
 }
 
@@ -387,6 +458,109 @@ function pickFile(f) {
   clearOutput();
 }
 
+// ── editor with commit ───────────────────────────────────────────
+
+let editorOriginal = '', editorOpenFile = null;
+const editorTa = document.getElementById('editorTa');
+const editorNameEl = document.getElementById('editorName');
+const editorDirtyEl = document.getElementById('editorDirty');
+const editorSaveBtn = document.getElementById('editorSaveBtn');
+const editorCommitBtn = document.getElementById('editorCommitBtn');
+const editorMsgEl = document.getElementById('editorMsg');
+const editorFileSel = document.getElementById('editorFile');
+
+function toggleEditor() {
+  const panel = document.getElementById('editorPanel');
+  const open = panel.style.display !== 'none';
+  panel.style.display = open ? 'none' : '';
+  document.getElementById('editorToggle').textContent = open ? '✏️ Edit files' : '✕ Close editor';
+  if (!open && !editorFileSel.options.length) loadEditorFiles();
+}
+
+async function loadEditorFiles() {
+  try {
+    const data = await fetch('/files').then(r => r.json());
+    editorFileSel.innerHTML = (data.files || [])
+      .map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
+    if (data.files && data.files.length) editorOpen();
+  } catch (_) {}
+}
+
+async function editorOpen() {
+  const file = editorFileSel.value;
+  if (!file) return;
+  try {
+    const data = await fetch('/file-content?file=' + encodeURIComponent(file)).then(r => r.json());
+    if (data.detail) throw new Error(data.detail);
+    editorOpenFile = file;
+    editorTa.value = data.content;
+    editorOriginal = data.content;
+    editorNameEl.textContent = file + ' · ' + data.line_count + ' lines';
+    editorTa.style.display = '';
+    editorMsgEl.style.display = 'none';
+    syncEditorState();
+  } catch (e) {
+    editorMsgEl.textContent = e.message;
+    editorMsgEl.style.display = '';
+  }
+}
+
+function syncEditorState() {
+  const dirty = editorTa.value !== editorOriginal;
+  editorDirtyEl.style.display = dirty ? '' : 'none';
+  editorSaveBtn.disabled = !dirty;
+  editorCommitBtn.disabled = dirty || !editorOpenFile;
+}
+
+editorTa.addEventListener('input', syncEditorState);
+
+async function editorSave() {
+  if (!editorOpenFile) return;
+  editorSaveBtn.disabled = true;
+  try {
+    const res = await fetch('/file-content', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: editorOpenFile, content: editorTa.value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'HTTP ' + res.status);
+    editorOriginal = editorTa.value;
+    editorMsgEl.textContent = 'Saved — ' + data.line_count + ' lines';
+    editorMsgEl.style.display = '';
+    syncEditorState();
+  } catch (e) {
+    editorMsgEl.textContent = e.message;
+    editorMsgEl.style.display = '';
+  }
+  editorSaveBtn.disabled = false;
+  syncEditorState();
+}
+
+async function editorCommit() {
+  if (!editorOpenFile || editorTa.value !== editorOriginal) return;
+  const message = prompt('Commit message for ' + editorOpenFile + ':', 'update ' + editorOpenFile);
+  if (!message) return;
+  editorCommitBtn.disabled = true;
+  editorCommitBtn.textContent = 'Committing…';
+  try {
+    const res = await fetch('/file-commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: editorOpenFile, content: editorTa.value, message }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'HTTP ' + res.status);
+    editorMsgEl.textContent = 'Committed as ' + data.commit + ' — "' + message + '"';
+    editorMsgEl.style.display = '';
+  } catch (e) {
+    editorMsgEl.textContent = e.message;
+    editorMsgEl.style.display = '';
+  }
+  editorCommitBtn.textContent = '✔ Commit';
+  syncEditorState();
+}
+
 // ── checks / output ────────────────────────────────────────────────
 
 function clearOutput() {
@@ -413,10 +587,11 @@ function toggle(key, btn) {
 
 async function run() {
   const target = tEl.value.trim();
-  if (!target || busy) return;
+  if (busy) return;
+  if (currentMode !== 'diff' && currentMode !== 'repo' && !target) return;
   busy = true;
   goEl.disabled = true;
-  goEl.textContent = currentMode === 'investigate' ? 'Investigating…' : 'Scanning…';
+  document.getElementById('wideGo').disabled = true;
   clearOutput();
   CHECKS.forEach(c => { state[c.display] = 'pending'; });
   renderChecks();
@@ -424,8 +599,18 @@ async function run() {
   cardEl.style.display = 'none';
 
   try {
-    const endpoint = currentMode === 'investigate' ? '/investigate' : '/heatmap';
-    const body = currentMode === 'investigate' ? { target } : { file: target };
+    const endpoint = currentMode === 'investigate' ? '/investigate'
+      : currentMode === 'heatmap' ? '/heatmap'
+      : currentMode === 'diff' ? '/diff-investigate'
+      : '/repo-heatmap';
+    const body = currentMode === 'investigate' ? { target }
+      : currentMode === 'heatmap' ? { file: target }
+      : null;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -463,6 +648,8 @@ function handle(ev) {
     renderChecks();
   } else if (ev.type === 'result') {
     if (ev.mode === 'heatmap') { renderHeatmap(ev); return; }
+    if (ev.mode === 'diff') { renderDiff(ev); return; }
+    if (ev.mode === 'repo') { renderRepo(ev); return; }
     const r = ev;
     const rows = CHECKS.map(c => {
       const raw = r.evidence && r.evidence[c.key];
@@ -497,12 +684,56 @@ function renderHeatmap(h) {
   cardEl.style.display = 'block';
 }
 
+function renderDiff(d) {
+  const rows = (d.functions || []).map(f => {
+    const cls = VCLASS[f.verdict] || 'v-review';
+    return `<div class="finding"><dt><span class="repo-badge ${cls}" style="border:none;padding:1px 8px">${esc(f.verdict)}</span>` +
+      `</dt><dd><b>${esc(f.name)}</b> <em>(${esc(f.file)}:${f.line}, ${esc(f.confidence)})</em><br>${esc(f.reason)}</dd></div>`;
+  }).join('');
+  cardEl.className = 'card v-review';
+  cardEl.innerHTML =
+    `<div class="card-head"><span class="verdict">My changes</span>` +
+    `<span class="confidence">${(d.changed_files || []).length} file(s) changed</span></div>` +
+    `<p class="summary">${esc(d.summary)}</p>` +
+    (rows || `<p>${esc(d.summary)}</p>`);
+  cardEl.style.display = 'block';
+}
+
+function renderRepo(repo) {
+  const files = repo.files || [];
+  const cells = files.map(f => {
+    const cls = f.verdict === 'Risky' ? 't-risky' : f.verdict === 'Safe' ? 't-safe' : 't-review';
+    const flex = Math.max(f.score * 2 + 1, 1);
+    const slash = f.file.lastIndexOf('/');
+    const short = slash === -1 ? f.file : f.file.slice(slash + 1);
+    return `<button class="tree-cell ${cls}" style="flex-grow:${flex}" ` +
+      `title="${esc(f.file)} — ${f.risky} risky, ${f.review} review, ${f.safe} safe of ${f.functions} functions" ` +
+      `onclick="pickFile('${esc(f.file).replace(/'/g, '')}')">` +
+      `<span class="tree-file">${esc(short)}</span>` +
+      `<span class="tree-counts">${f.risky}R · ${f.review}? · ${f.safe}S</span></button>`;
+  }).join('');
+  const rows = files.map(f => {
+    const cls = VCLASS[f.verdict] || 'v-review';
+    return `<div class="finding"><dt><span class="repo-badge ${cls}" style="border:none;padding:1px 8px">${esc(f.verdict)}</span></dt>` +
+      `<dd><b>${esc(f.file)}</b> — ${f.functions} functions: ${f.risky} risky · ${f.review} review · ${f.safe} safe</dd></div>`;
+  }).join('');
+  cardEl.className = 'card v-review';
+  cardEl.innerHTML =
+    `<div class="card-head"><span class="verdict">Repo risk treemap</span>` +
+    `<span class="confidence">${files.length} files</span></div>` +
+    `<p class="summary">${esc(repo.summary)}</p>` +
+    (cells ? `<div class="treemap">${cells}</div>` : '') +
+    (rows || `<p>${esc(repo.summary)}</p>`);
+  cardEl.style.display = 'block';
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 goEl.onclick = run;
+document.getElementById('wideGo').onclick = run;
 tEl.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
 
 // Boot: load current repo status so the UI is correct on page load

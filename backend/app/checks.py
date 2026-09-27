@@ -306,3 +306,96 @@ def list_functions(target_file: str) -> list[dict]:
             if name:
                 out.append({"name": name, "line": i})
     return out
+
+
+# ------------------------------------------------------------- working-tree diff
+
+
+def _func_header_re() -> re.Pattern[str]:
+    return re.compile(
+        r"^\+\s*(?:export\s+)?(?:async\s+)?(?:function\s+(?P<js>\w+)"
+        r"|(?:def|class)\s+(?P<py>\w+)"
+        r"|const\s+(?P<cs>\w+)\s*=\s*(?:async\s*)?\()"
+    )
+
+
+def changed_regions() -> list[dict]:
+    """Functions/regions touched by uncommitted changes (staged + unstaged).
+
+    For each changed file, pair removed/added function-header lines in the diff
+    so edits inside an existing function resolve to that function's definition
+    line in the current working tree, and brand-new functions resolve to their
+    own added header. Falls back to reporting the file itself when no function
+    header can be resolved.
+    """
+    repo = _repo()
+    status_out = _git(repo, "status", "--porcelain")
+    entries = [ln for ln in status_out.splitlines() if ln.strip()]
+    if not entries:
+        return []
+
+    header_re = _func_header_re()
+    regions: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    for entry in entries:
+        path = entry[3:].strip().strip('"')
+        if path.startswith("...") or "=>" in path:
+            continue  # rename pairs / non-plain paths
+        if any(h in path for h in TEST_HINTS) or path.lower().endswith(NON_CODE_SUFFIXES):
+            continue
+
+        diff = _git(repo, "diff", "HEAD", "--", path)
+        if not diff.strip():
+            continue
+
+        minus: list[str] = []
+        plus: list[str] = []
+        cur_file_line = 0
+        for dline in diff.splitlines():
+            if dline.startswith("@@"):
+                m = re.search(r"\+(\d+)", dline.split("@@")[1])
+                cur_file_line = int(m.group(1)) - 1 if m else 0
+                continue
+            if dline.startswith("+") and not dline.startswith("+++"):
+                cur_file_line += 1
+                hm = header_re.match(dline)
+                if hm:
+                    plus.append(hm.group("js") or hm.group("py") or hm.group("cs") or "")
+            elif dline.startswith("-") and not dline.startswith("---"):
+                hm = header_re.match(dline)
+                if hm:
+                    minus.append(hm.group("js") or hm.group("py") or hm.group("cs") or "")
+
+        if not minus and not plus:
+            # changed file but no recognizable function headers
+            regions.append({"file": path, "name": "(whole file)", "line": 1})
+            continue
+
+        added_names = [n for n in plus if n]
+        removed_names = [n for n in minus if n]
+        # Edit inside an existing function: the name appears on both sides.
+        # New function: added but never removed. Reuse current-tree line numbers.
+        funcs_in_file = {f["name"]: f["line"] for f in list_functions(path)}
+        resolved: set[str] = set()
+        for name in added_names:
+            if name in removed_names and name in funcs_in_file:
+                regions.append({"file": path, "name": name, "line": funcs_in_file[name]})
+                resolved.add(name)
+            elif name not in removed_names and name in funcs_in_file:
+                regions.append({"file": path, "name": name, "line": funcs_in_file[name]})
+                resolved.add(name)
+        for name in removed_names:
+            if name not in resolved and name in funcs_in_file:
+                regions.append({"file": path, "name": name, "line": funcs_in_file[name]})
+                resolved.add(name)
+        if not resolved:
+            regions.append({"file": path, "name": "(whole file)", "line": 1})
+
+    unique: list[dict] = []
+    for r in regions:
+        key = (r["file"], r["name"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    return unique
