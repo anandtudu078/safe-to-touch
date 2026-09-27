@@ -317,11 +317,16 @@ let repoConnected = false, allFiles = [];
 
 // ── repo connector ────────────────────────────────────────────────
 
-async function loadRepoStatus() {
+async function loadRepoStatus(attempt) {
+  attempt = attempt || 0;
   try {
     const d = await fetch('/repo/status').then(r => r.json());
     applyRepoStatus(d);
-  } catch (_) {}
+  } catch (_) {
+    // A transient failure (restart, network blip) must not look like
+    // "no repo connected" — retry a few times before giving up.
+    if (attempt < 3) setTimeout(() => loadRepoStatus(attempt + 1), 2000);
+  }
 }
 
 function applyRepoStatus(d) {

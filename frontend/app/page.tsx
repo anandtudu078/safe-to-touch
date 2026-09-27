@@ -671,11 +671,26 @@ export default function Home() {
   // Track the last investigated file for the Relations panel
   const [graphFile, setGraphFile] = useState('')
 
+  // Load connection state on mount; retry — a transient failure (restart,
+  // network blip) must not look like "no repo connected".
   useEffect(() => {
-    fetch(`${API_BASE}/repo/status`)
-      .then((r) => r.json())
-      .then((d: RepoStatus) => setRepoConnected(Boolean(d.connected)))
-      .catch(() => {})
+    let cancelled = false
+    const tryFetch = (attempt: number) => {
+      fetch(`${API_BASE}/repo/status`)
+        .then((r) => r.json())
+        .then((d: RepoStatus) => {
+          if (!cancelled) setRepoConnected(Boolean(d.connected))
+        })
+        .catch(() => {
+          if (!cancelled && attempt < 3) {
+            setTimeout(() => tryFetch(attempt + 1), 2000)
+          }
+        })
+    }
+    tryFetch(0)
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   async function run() {
