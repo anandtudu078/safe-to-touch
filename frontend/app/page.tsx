@@ -135,10 +135,12 @@ const SECTION_BY_AGENT: Record<string, keyof Evidence> = {
 // ---------------------------------------------------------------------------
 
 type RepoConnectorProps = {
-  onConnected: () => void
+  onConnected?: () => void
+  /** Called after any repo state change (connect or commit) so the badge stays live */
+  onRepoChanged?: () => void
 }
 
-function RepoConnector({ onConnected }: RepoConnectorProps) {
+function RepoConnector({ onConnected, onRepoChanged }: RepoConnectorProps) {
   const [open, setOpen] = useState(false)
   const [source, setSource] = useState('')
   const [loading, setLoading] = useState(false)
@@ -146,13 +148,27 @@ function RepoConnector({ onConnected }: RepoConnectorProps) {
   const [connectError, setConnectError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Load current repo status on mount
-  useEffect(() => {
+  const loadStatus = useCallback(() => {
     fetch(`${API_BASE}/repo/status`)
       .then((r) => r.json())
       .then((d: RepoStatus) => setStatus(d))
       .catch(() => {})
   }, [])
+
+  // Load current repo status on mount
+  useEffect(() => {
+    loadStatus()
+  }, [loadStatus])
+
+  // Parent can ask for a refresh (e.g. after a commit moved HEAD)
+  useEffect(() => {
+    if (onRepoChanged) {
+      // Subscribe via a custom event so no prop re-render loops occur
+      const handler = () => loadStatus()
+      window.addEventListener('stt:repo-changed', handler)
+      return () => window.removeEventListener('stt:repo-changed', handler)
+    }
+  }, [onRepoChanged, loadStatus])
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 50)
@@ -175,7 +191,7 @@ function RepoConnector({ onConnected }: RepoConnectorProps) {
         setStatus(data as RepoStatus)
         setSource('')
         setOpen(false)
-        onConnected()
+        onConnected?.()
       }
     } catch (e) {
       setConnectError(e instanceof Error ? e.message : String(e))
@@ -440,9 +456,10 @@ function FileBrowser({ onSelect, mode, refreshKey }: FileBrowserProps) {
 
 type FileEditorProps = {
   refreshKey: number
+  onReviewChanges: () => void
 }
 
-function FileEditor({ refreshKey }: FileEditorProps) {
+function FileEditor({ refreshKey, onReviewChanges }: FileEditorProps) {
   const [open, setOpen] = useState(false)
   const [files, setFiles] = useState<string[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -456,6 +473,9 @@ function FileEditor({ refreshKey }: FileEditorProps) {
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [editorError, setEditorError] = useState<string | null>(null)
   const [filterQuery, setFilterQuery] = useState('')
+  const [commitDialogOpen, setCommitDialogOpen] = useState(false)
+  const [commitMessage, setCommitMessage] = useState('')
+  const [lastCommit, setLastCommit] = useState<{ sha: string; file: string } | null>(null)
 
   // Load file list when editor opens or repo changes
   useEffect(() => {
@@ -522,13 +542,18 @@ function FileEditor({ refreshKey }: FileEditorProps) {
     setEditorError(null)
   }
 
+  function openCommitDialog() {
+    if (!selectedFile) return
+    setCommitMessage(`update ${selectedFile}`)
+    setCommitDialogOpen(true)
+  }
+
   async function commitFile() {
-    if (!selectedFile || committing || content === originalContent) return
-    const message = window.prompt(`Commit message for ${selectedFile}:`, `update ${selectedFile}`)
+    if (!selectedFile || committing) return
+    const message = commitMessage.trim()
     if (!message) return
     setCommitting(true)
     setEditorError(null)
-    setSaveMsg(null)
     try {
       const res = await fetch(`${API_BASE}/file-commit`, {
         method: 'POST',
@@ -539,7 +564,11 @@ function FileEditor({ refreshKey }: FileEditorProps) {
       if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
       setOriginalContent(content)
       setLineCount(content.split('\n').length)
+      setLastCommit({ sha: data.commit, file: selectedFile })
       setSaveMsg(`Committed as ${data.commit} — "${message}"`)
+      setCommitDialogOpen(false)
+      // Refresh the repo badge so it shows the new HEAD commit
+      window.dispatchEvent(new CustomEvent('stt:repo-changed'))
     } catch (e) {
       setEditorError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -621,7 +650,7 @@ function FileEditor({ refreshKey }: FileEditorProps) {
                     </button>
                     <button
                       className="editor-btn editor-commit"
-                      onClick={commitFile}
+                      onClick={openCommitDialog}
                       disabled={isDirty || committing}
                       title={isDirty ? 'Save first, then commit' : 'Commit this file'}
                     >
@@ -631,6 +660,50 @@ function FileEditor({ refreshKey }: FileEditorProps) {
                 </div>
                 {saveMsg && <p className="editor-save-msg">{saveMsg}</p>}
                 {editorError && <p className="browser-status browser-error">{editorError}</p>}
+                {lastCommit && !isDirty && (
+                  <div className="editor-next-step">
+                    <span>
+                      Committed <b>{lastCommit.sha}</b> on {lastCommit.file}
+                    </span>
+                    <button
+                      className="editor-btn editor-review"
+                      onClick={onReviewChanges}
+                      title="Check whether this change is safe to keep"
+                    >
+                      🔍 Review this change
+                    </button>
+                  </div>
+                )}
+                {commitDialogOpen && (
+                  <div className="commit-dialog" role="dialog" aria-label="Commit message">
+                    <label htmlFor="commit-message">Commit message</label>
+                    <input
+                      id="commit-message"
+                      value={commitMessage}
+                      onChange={(e) => setCommitMessage(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && commitFile()}
+                      autoFocus
+                      maxLength={200}
+                      placeholder="feat: describe your change"
+                    />
+                    <div className="commit-dialog-actions">
+                      <button
+                        className="editor-btn"
+                        onClick={() => setCommitDialogOpen(false)}
+                        disabled={committing}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="editor-btn editor-save"
+                        onClick={commitFile}
+                        disabled={committing || !commitMessage.trim()}
+                      >
+                        {committing ? 'Committing…' : 'Commit'}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <textarea
                   className="editor-textarea"
                   value={content}
@@ -807,6 +880,9 @@ export default function Home() {
           setTarget('')
           clearOutput()
         }}
+        onRepoChanged={() => {
+          /* badge refreshes itself via the stt:repo-changed event */
+        }}
       />
 
       {!repoConnected && (
@@ -894,7 +970,13 @@ export default function Home() {
           )}
 
           {/* ── Step 2: file editor ──────────────────────────────────── */}
-          <FileEditor refreshKey={repoRefreshKey} />
+          <FileEditor
+            refreshKey={repoRefreshKey}
+            onReviewChanges={() => {
+              setMode('diff')
+              clearOutput()
+            }}
+          />
 
           {(investigating || checks.some((c) => c.status !== 'pending')) && (
             <ul className="checks">

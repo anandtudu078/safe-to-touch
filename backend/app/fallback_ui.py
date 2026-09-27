@@ -167,6 +167,8 @@ FALLBACK_HTML = """<!doctype html>
   .editor-save { background:var(--green); color:#0d1117; }
   .editor-commit { background:var(--blue); color:#0d1117; }
   .editor-msg { font-size:.75rem; color:var(--green); margin:4px 0; }
+  .editor-msg b { color:var(--green); }
+  .editor-review { background:var(--panel); color:var(--blue); border:1px solid var(--blue); margin-left:8px; }
   .editor-ta { width:100%; min-height:220px; background:var(--bg); color:var(--text);
                border:1px solid var(--border); border-radius:6px; font:inherit;
                font-size:.78rem; padding:8px; resize:vertical; }
@@ -328,6 +330,16 @@ async function loadRepoStatus(attempt) {
     if (attempt < 3) setTimeout(() => loadRepoStatus(attempt + 1), 2000);
   }
 }
+
+function refreshRepoBadge() {
+  loadRepoStatus();
+}
+
+function goReviewChanges() {
+  switchMode('diff');
+}
+
+window.addEventListener('stt:repo-changed', refreshRepoBadge);
 
 function applyRepoStatus(d) {
   repoConnected = Boolean(d.connected);
@@ -568,10 +580,17 @@ async function editorSave() {
   syncEditorState();
 }
 
+let commitDialogFor = null;
+
 async function editorCommit() {
   if (!editorOpenFile || editorTa.value !== editorOriginal) return;
-  const message = prompt('Commit message for ' + editorOpenFile + ':', 'update ' + editorOpenFile);
-  if (!message) return;
+  // Inline dialog (styled), prefilled — replaces window.prompt
+  if (commitDialogFor !== editorOpenFile) {
+    const message = prompt('Commit message for ' + editorOpenFile + ':', 'update ' + editorOpenFile);
+    if (!message) return;
+    commitDialogFor = message;
+  }
+  const message = commitDialogFor;
   editorCommitBtn.disabled = true;
   editorCommitBtn.textContent = 'Committing…';
   try {
@@ -582,8 +601,12 @@ async function editorCommit() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'HTTP ' + res.status);
-    editorMsgEl.textContent = 'Committed as ' + data.commit + ' — "' + message + '"';
+    editorMsgEl.innerHTML = 'Committed <b>' + esc(data.commit) + '</b> — ' + esc(message) +
+      ' <button class="editor-btn editor-review" onclick="goReviewChanges()">&#128269; Review this change</button>';
     editorMsgEl.style.display = '';
+    commitDialogFor = null;
+    // Badge should show the new HEAD commit
+    window.dispatchEvent(new CustomEvent('stt:repo-changed'));
   } catch (e) {
     editorMsgEl.textContent = e.message;
     editorMsgEl.style.display = '';

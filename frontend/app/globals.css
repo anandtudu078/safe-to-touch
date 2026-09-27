@@ -825,6 +825,70 @@ main:has(.repo-connected) {
   color: #0d1117;
 }
 
+/* Commit dialog (inline, replaces window.prompt) */
+.commit-dialog {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--blue);
+  border-radius: 6px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.commit-dialog label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.commit-dialog input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.commit-dialog input:focus {
+  outline: 1px solid var(--blue);
+}
+
+.commit-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Post-commit next step */
+.editor-next-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--green);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.editor-next-step b {
+  color: var(--green);
+}
+
+.editor-review {
+  background: var(--panel);
+  color: var(--blue);
+  border: 1px solid var(--blue);
+}
+
 .wide-action {
   flex: 1;
   max-width: 640px;
